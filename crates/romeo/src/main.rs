@@ -134,8 +134,8 @@ struct Cli {
     wrap_addition: f64,
 
     /// Spatially unwrap low-quality voxels after temporal unwrapping (EXPERIMENTAL)
-    #[arg(long, num_args = 0..=1, default_missing_value = "0.5")]
-    temporal_uncertain_unwrapping: Option<f64>,
+    #[arg(long, num_args = 0..=1, default_value_t = 0.0, default_missing_value = "0.5")]
+    temporal_uncertain_unwrapping: f64,
 }
 
 fn main() -> Result<()> {
