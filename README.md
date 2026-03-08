@@ -5,8 +5,8 @@
 Lightweight Rust CLI binaries for MRI processing — Rust ports of the Julia tools
 from [korbinian90/CompileMRI.jl](https://github.com/korbinian90/CompileMRI.jl) (v4.7.1).
 
-The binaries match the Julia CLI interfaces exactly, making them drop-in replacements
-for existing pipelines.
+The binaries aim to closely follow the Julia CLI interfaces so they can be used as
+drop-in replacements in most existing pipelines, but there may still be minor differences.
 
 ## Binaries
 
