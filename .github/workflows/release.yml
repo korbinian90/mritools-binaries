@@ -12,6 +12,8 @@ jobs:
   build-release:
     name: Build release (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
