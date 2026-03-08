@@ -20,3 +20,4 @@ repository = "https://github.com/korbinian90/mritools-binaries"
 clap = { version = "4", features = ["derive"] }
 qsm-core = { git = "https://github.com/astewartau/QSM.rs", tag = "v0.2.0" }
 anyhow = "1"
+tempfile = "3"

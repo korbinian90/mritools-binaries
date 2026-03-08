@@ -14,3 +14,6 @@ mritools-common = { path = "../common" }
 qsm-core = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
