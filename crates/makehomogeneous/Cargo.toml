@@ -1,0 +1,15 @@
+[package]
+name = "makehomogeneous"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Homogeneity correction CLI for high-field MRI"
+
+[[bin]]
+name = "makehomogeneous"
+path = "src/main.rs"
+
+[dependencies]
+mritools-common = { path = "../common" }
+clap = { workspace = true }
+anyhow = { workspace = true }

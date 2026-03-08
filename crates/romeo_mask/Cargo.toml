@@ -1,0 +1,15 @@
+[package]
+name = "romeo_mask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROMEO quality-based brain masking CLI"
+
+[[bin]]
+name = "romeo_mask"
+path = "src/main.rs"
+
+[dependencies]
+mritools-common = { path = "../common" }
+clap = { workspace = true }
+anyhow = { workspace = true }
