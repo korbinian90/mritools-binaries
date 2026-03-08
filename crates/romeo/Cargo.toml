@@ -1,0 +1,16 @@
+[package]
+name = "romeo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROMEO phase unwrapping CLI (Rust port of korbinian90/ROMEO.jl)"
+
+[[bin]]
+name = "romeo"
+path = "src/main.rs"
+
+[dependencies]
+mritools-common = { path = "../common" }
+qsm-core = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

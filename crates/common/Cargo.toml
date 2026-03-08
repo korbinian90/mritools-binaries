@@ -1,0 +1,9 @@
+[package]
+name = "mritools-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+qsm-core = { workspace = true }
+anyhow = { workspace = true }

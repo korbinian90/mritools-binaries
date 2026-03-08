@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/common",
+    "crates/romeo",
+    "crates/clearswi",
+    "crates/mcpc3ds",
+    "crates/makehomogeneous",
+    "crates/romeo_mask",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["mritools-binaries contributors"]
+repository = "https://github.com/korbinian90/mritools-binaries"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+qsm-core = { git = "https://github.com/astewartau/QSM.rs", tag = "v0.2.0" }
+anyhow = "1"

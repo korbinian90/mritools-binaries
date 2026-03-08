@@ -1,0 +1,15 @@
+[package]
+name = "mcpc3ds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCPC-3D-S multi-channel phase combination CLI"
+
+[[bin]]
+name = "mcpc3ds"
+path = "src/main.rs"
+
+[dependencies]
+mritools-common = { path = "../common" }
+clap = { workspace = true }
+anyhow = { workspace = true }
