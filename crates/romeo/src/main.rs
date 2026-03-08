@@ -62,7 +62,7 @@ struct Cli {
     compute_b0: Option<String>,
 
     /// Weighting for B0 calculation: phase_snr | phase_var | average | TEs | mag | simulated_mag
-    #[arg(long, default_value = "phase_snr")]
+    #[arg(long = "B0-phase-weighting", default_value = "phase_snr")]
     b0_phase_weighting: String,
 
     /// Phase offset correction: on | off | bipolar
