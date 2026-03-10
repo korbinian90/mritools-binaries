@@ -47,18 +47,38 @@ pub fn parse_echo_times(args: &[String]) -> anyhow::Result<Vec<f64>> {
 
     let joined = args.join(" ");
 
-    // Julia-style range: start:step:stop
+    // Julia-style range: start:step:stop or start:stop (step defaults to 1)
     if joined.contains(':') {
         let parts: Vec<&str> = joined.split(':').collect();
         if parts.len() == 3 {
             let start: f64 = parts[0].trim().parse()?;
             let step: f64 = parts[1].trim().parse()?;
             let stop: f64 = parts[2].trim().parse()?;
+            if step == 0.0 {
+                return Err(anyhow::anyhow!("Echo time range step cannot be zero"));
+            }
+            let mut tes = vec![];
+            let mut t = start;
+            if step > 0.0 {
+                while t <= stop + 1e-9 {
+                    tes.push(t);
+                    t += step;
+                }
+            } else {
+                while t >= stop - 1e-9 {
+                    tes.push(t);
+                    t += step;
+                }
+            }
+            return Ok(tes);
+        } else if parts.len() == 2 {
+            let start: f64 = parts[0].trim().parse()?;
+            let stop: f64 = parts[1].trim().parse()?;
             let mut tes = vec![];
             let mut t = start;
             while t <= stop + 1e-9 {
                 tes.push(t);
-                t += step;
+                t += 1.0;
             }
             return Ok(tes);
         }
@@ -107,6 +127,23 @@ mod tests {
         assert!((tes[0] - 3.5).abs() < 1e-9);
         assert!((tes[1] - 7.0).abs() < 1e-9);
         assert!((tes[2] - 10.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_echo_times_two_part_range() {
+        let args = vec!["1:3".to_string()];
+        let tes = parse_echo_times(&args).unwrap();
+        assert_eq!(tes.len(), 3);
+        assert!((tes[0] - 1.0).abs() < 1e-9);
+        assert!((tes[1] - 2.0).abs() < 1e-9);
+        assert!((tes[2] - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_echo_times_range_zero_step_error() {
+        let args = vec!["1:0:3".to_string()];
+        let result = parse_echo_times(&args);
+        assert!(result.is_err(), "expected error for zero step");
     }
 
     #[test]

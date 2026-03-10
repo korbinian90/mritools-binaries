@@ -13,3 +13,6 @@ path = "src/main.rs"
 mritools-common = { path = "../common" }
 clap = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
