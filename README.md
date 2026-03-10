@@ -15,14 +15,10 @@ drop-in replacements in most existing pipelines, but there may still be minor di
 | Binary | Description | Status |
 |---|---|---|
 | `romeo` | ROMEO phase unwrapping | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
-| `clearswi` | CLEAR-SWI susceptibility weighted imaging | ⚠️ Stub (CLI compatible) |
-| `mcpc3ds` | MCPC-3D-S multi-channel phase combination | ⚠️ Stub (CLI compatible) |
-| `makehomogeneous` | Homogeneity correction for high-field MRI | ⚠️ Stub (CLI compatible) |
-| `romeo_mask` | ROMEO quality-based brain masking | ⚠️ Stub (CLI compatible) |
-
-Stub binaries accept all CLI flags for compatibility with existing scripts but do not
-yet perform the actual processing. Full implementations will be added as the upstream
-[QSM.rs](https://github.com/astewartau/QSM.rs) library gains the required features.
+| `clearswi` | CLEAR-SWI susceptibility weighted imaging | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
+| `mcpc3ds` | MCPC-3D-S multi-channel phase combination | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
+| `makehomogeneous` | Homogeneity correction for high-field MRI | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
+| `romeo_mask` | ROMEO quality-based brain masking | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
 
 ## Installation
 

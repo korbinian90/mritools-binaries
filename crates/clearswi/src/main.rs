@@ -5,12 +5,12 @@
 //! Reference:
 //!   Eckstein, K., et al. (2024). "CLEAR-SWI: Computational Efficient T2* Weighted Imaging."
 //!   Proc. ISMRM.
-//!
-//! NOTE: Full CLEAR-SWI processing is not yet implemented. This binary accepts
-//! all CLI flags for compatibility with existing scripts but prints a warning.
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use mritools_common::{parse_echo_times, read_nifti, write_nifti};
+use qsm_core::swi::{calculate_swi, create_mip, softplus_scaling, PhaseScaling};
+use qsm_core::unwrap::laplacian::laplacian_unwrap;
 
 /// CLEAR-SWI susceptibility weighted imaging.
 ///
@@ -111,11 +111,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    eprintln!(
-        "WARNING: CLEAR-SWI full processing is not yet implemented in this Rust port. \
-         The binary accepts all CLI flags for compatibility."
-    );
-
     let magnitude = cli
         .magnitude
         .as_deref()
@@ -147,5 +142,210 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     mritools_common::save_settings(output_dir, "clearswi", &args)?;
 
+    // Parse echo times
+    let _echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+
+    // Load magnitude image
+    let mag_nii = read_nifti(magnitude)
+        .with_context(|| format!("Failed to read magnitude image '{}'", magnitude))?;
+
+    let (nx, ny, nz) = mag_nii.dims;
+    let (vsx, vsy, vsz) = mag_nii.voxel_size;
+    let n_voxels = nx * ny * nz;
+
+    if cli.verbose {
+        eprintln!("  dims: {}x{}x{}", nx, ny, nz);
+        eprintln!("  voxel size: {:.3}x{:.3}x{:.3} mm", vsx, vsy, vsz);
+    }
+
+    // Build mask from magnitude
+    let mask = robust_mask(&mag_nii.data);
+
+    // Get phase data (load and unwrap, or default to zeros if no phase provided)
+    let unwrapped_phase: Vec<f64> = if let Some(ref phase_path) = cli.phase {
+        let phase_nii = read_nifti(phase_path)
+            .with_context(|| format!("Failed to read phase image '{}'", phase_path))?;
+        let mut phase_data = phase_nii.data;
+
+        // Rescale phase to [-π; π] if needed
+        if !cli.no_phase_rescale {
+            rescale_phase(&mut phase_data);
+        }
+
+        // Unwrap phase
+        laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz)
+    } else {
+        vec![0.0; n_voxels]
+    };
+
+    // Parse filter size
+    let hp_sigma = parse_filter_size(&cli.filter_size);
+
+    // Parse phase scaling type
+    let scaling = match cli.phase_scaling_type.to_lowercase().as_str() {
+        "tanh" => PhaseScaling::Tanh,
+        "negativetanh" => PhaseScaling::NegativeTanh,
+        "positive" => PhaseScaling::Positive,
+        "negative" => PhaseScaling::Negative,
+        "triangular" => PhaseScaling::Triangular,
+        _ => PhaseScaling::Tanh,
+    };
+
+    let strength: f64 = cli.phase_scaling_strength.parse().unwrap_or(4.0);
+
+    if cli.verbose {
+        eprintln!(
+            "  filter size: [{:.1}, {:.1}, {:.1}]",
+            hp_sigma[0], hp_sigma[1], hp_sigma[2]
+        );
+        eprintln!("  phase scaling: {:?}, strength: {}", scaling, strength);
+    }
+
+    // Calculate SWI
+    let mut swi = calculate_swi(
+        &unwrapped_phase,
+        &mag_nii.data,
+        &mask,
+        nx,
+        ny,
+        nz,
+        vsx,
+        vsy,
+        vsz,
+        hp_sigma,
+        scaling,
+        strength,
+    );
+
+    // Apply softplus scaling if enabled
+    if cli.mag_softplus_scaling != "off" {
+        // Estimate offset from magnitude (median of masked values)
+        let masked_vals: Vec<f64> = mag_nii
+            .data
+            .iter()
+            .zip(mask.iter())
+            .filter_map(|(&v, &m)| if m > 0 { Some(v) } else { None })
+            .collect();
+        if !masked_vals.is_empty() {
+            let offset = compute_median(&masked_vals) * 0.1;
+            if offset > 0.0 {
+                swi = softplus_scaling(&swi, offset, 2.0);
+            }
+        }
+    }
+
+    if cli.verbose {
+        eprintln!("  SWI calculation complete");
+    }
+
+    // Write SWI output
+    let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
+        cli.output.clone()
+    } else {
+        format!("{}.nii", cli.output)
+    };
+
+    let mut out_nii = mag_nii;
+    out_nii.data = swi.clone();
+    write_nifti(&out_path, &out_nii)
+        .with_context(|| format!("Failed to write output '{}'", out_path))?;
+
+    if cli.verbose {
+        eprintln!("  saved to: {}", out_path);
+    }
+
+    // Create MIP if requested
+    let mip_window: usize = cli.mip_slices.parse().unwrap_or(7);
+    if mip_window > 0 && mip_window <= nz {
+        let mip = create_mip(&swi, nx, ny, nz, mip_window);
+        if !mip.is_empty() {
+            let nz_mip = nz - mip_window + 1;
+            let mip_path = derive_path(&out_path, "mip");
+            let mip_nii = mritools_common::NiftiData {
+                data: mip,
+                dims: (nx, ny, nz_mip),
+                voxel_size: out_nii.voxel_size,
+                affine: out_nii.affine,
+                scl_slope: out_nii.scl_slope,
+                scl_inter: out_nii.scl_inter,
+            };
+            write_nifti(&mip_path, &mip_nii)
+                .with_context(|| format!("Failed to write MIP '{}'", mip_path))?;
+            if cli.verbose {
+                eprintln!("  MIP saved to: {}", mip_path);
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Rescale phase data to the range [-π, π].
+fn rescale_phase(phase: &mut [f64]) {
+    let min = phase.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = phase.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if (max - min).abs() < 1e-10 {
+        return;
+    }
+    let pi = std::f64::consts::PI;
+    for v in phase.iter_mut() {
+        *v = (*v - min) / (max - min) * 2.0 * pi - pi;
+    }
+}
+
+/// Build a robust magnitude-based binary mask (threshold at 10% of max).
+fn robust_mask(mag: &[f64]) -> Vec<u8> {
+    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
+    if max < 1e-10 {
+        return vec![1u8; mag.len()];
+    }
+    let threshold = 0.1 * max;
+    mag.iter()
+        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
+        .collect()
+}
+
+/// Parse filter size from CLI arguments. Default: [4.0, 4.0, 0.0].
+fn parse_filter_size(args: &[String]) -> [f64; 3] {
+    if args.is_empty() {
+        return [4.0, 4.0, 0.0];
+    }
+    let joined = args.join(" ");
+    let cleaned = joined
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .replace(',', " ");
+    let vals: Vec<f64> = cleaned
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    match vals.len() {
+        0 => [4.0, 4.0, 0.0],
+        1 => [vals[0], vals[0], 0.0],
+        2 => [vals[0], vals[1], 0.0],
+        _ => [vals[0], vals[1], vals[2]],
+    }
+}
+
+/// Compute the median of a slice.
+fn compute_median(values: &[f64]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = sorted.len();
+    if n.is_multiple_of(2) {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    } else {
+        sorted[n / 2]
+    }
+}
+
+/// Derive a side-output path by inserting a suffix before the `.nii` extension.
+fn derive_path(base: &str, suffix: &str) -> String {
+    if let Some(stripped) = base.strip_suffix(".nii.gz") {
+        format!("{}_{}.nii.gz", stripped, suffix)
+    } else if let Some(stripped) = base.strip_suffix(".nii") {
+        format!("{}_{}.nii", stripped, suffix)
+    } else {
+        format!("{}_{}.nii", base, suffix)
+    }
 }

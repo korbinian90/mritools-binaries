@@ -18,6 +18,6 @@ repository = "https://github.com/korbinian90/mritools-binaries"
 
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
-qsm-core = { git = "https://github.com/astewartau/QSM.rs", tag = "v0.2.0" }
+qsm-core = { git = "https://github.com/astewartau/QSM.rs", tag = "v0.3.3" }
 anyhow = "1"
 tempfile = "3"

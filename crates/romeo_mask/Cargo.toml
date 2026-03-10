@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 mritools-common = { path = "../common" }
+qsm-core = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 

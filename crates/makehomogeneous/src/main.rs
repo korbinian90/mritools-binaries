@@ -5,12 +5,10 @@
 //! Reference:
 //!   Eckstein, K., Trattnig, S., Robinson, S.D. (2019). "A Simple Homogeneity
 //!   Correction for Neuroimaging at 7T." Proc. ISMRM 27th Annual Meeting.
-//!
-//! NOTE: Full homogeneity correction processing is not yet implemented. This binary
-//! accepts all CLI flags for compatibility with existing scripts but prints a warning.
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use mritools_common::{read_nifti, write_nifti};
 
 /// Homogeneity correction for high-field MRI.
 ///
@@ -52,11 +50,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    eprintln!(
-        "WARNING: makehomogeneous full processing is not yet implemented in this Rust port. \
-         The binary accepts all CLI flags for compatibility."
-    );
-
     let magnitude = cli
         .magnitude
         .as_deref()
@@ -85,6 +78,51 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     mritools_common::save_settings(output_dir, "makehomogeneous", &args)?;
+
+    // Load magnitude image
+    let mag_nii = read_nifti(magnitude)
+        .with_context(|| format!("Failed to read magnitude image '{}'", magnitude))?;
+
+    let (nx, ny, nz) = mag_nii.dims;
+    let (vx, vy, vz) = mag_nii.voxel_size;
+
+    if cli.verbose {
+        eprintln!("  dims: {}x{}x{}", nx, ny, nz);
+        eprintln!("  voxel size: {:.3}x{:.3}x{:.3} mm", vx, vy, vz);
+    }
+
+    // Apply homogeneity correction
+    let corrected = qsm_core::utils::makehomogeneous(
+        &mag_nii.data,
+        nx,
+        ny,
+        nz,
+        vx,
+        vy,
+        vz,
+        cli.sigma_bias_field,
+        cli.nbox.max(1) as usize,
+    );
+
+    if cli.verbose {
+        eprintln!("  homogeneity correction complete");
+    }
+
+    // Write output
+    let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
+        cli.output.clone()
+    } else {
+        format!("{}.nii", cli.output)
+    };
+
+    let mut out_nii = mag_nii;
+    out_nii.data = corrected;
+    write_nifti(&out_path, &out_nii)
+        .with_context(|| format!("Failed to write output '{}'", out_path))?;
+
+    if cli.verbose {
+        eprintln!("  saved to: {}", out_path);
+    }
 
     Ok(())
 }
