@@ -1,5 +1,7 @@
 # mritools-binaries
 
+(Warning: fully vibe-coded CLI support using [QSM.rs](https://github.com/astewartau/QSM.rs) with the [CompileMRI.jl](https://github.com/korbinian90/CompileMRI.jl) CLI API)
+
 [![CI](https://github.com/korbinian90/mritools-binaries/actions/workflows/ci.yml/badge.svg)](https://github.com/korbinian90/mritools-binaries/actions/workflows/ci.yml)
 
 Lightweight Rust CLI binaries for MRI processing — Rust ports of the Julia tools
