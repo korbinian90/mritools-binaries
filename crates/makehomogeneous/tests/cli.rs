@@ -31,6 +31,10 @@ fn makehomogeneous_sigma_int() {
         .status()
         .expect("failed to execute makehomogeneous");
     assert!(status.success(), "makehomogeneous exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_makehomogeneous.txt").exists(),
+        "settings_makehomogeneous.txt was not created"
+    );
 }
 
 /// Test: `makehomogeneous -m Mag.nii -s 3.5 -o <tmpfile>`
@@ -52,6 +56,10 @@ fn makehomogeneous_sigma_float() {
         .status()
         .expect("failed to execute makehomogeneous");
     assert!(status.success(), "makehomogeneous exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_makehomogeneous.txt").exists(),
+        "settings_makehomogeneous.txt was not created"
+    );
 }
 
 /// Test: `makehomogeneous -m Mag.nii -n 4 -o <tmpfile>`
@@ -66,6 +74,10 @@ fn makehomogeneous_nbox() {
         .status()
         .expect("failed to execute makehomogeneous");
     assert!(status.success(), "makehomogeneous exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_makehomogeneous.txt").exists(),
+        "settings_makehomogeneous.txt was not created"
+    );
 }
 
 /// Test: `makehomogeneous -m Mag.nii -d Float64 -o <tmpfile>`
@@ -87,6 +99,10 @@ fn makehomogeneous_datatype_float64() {
         .status()
         .expect("failed to execute makehomogeneous");
     assert!(status.success(), "makehomogeneous exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_makehomogeneous.txt").exists(),
+        "settings_makehomogeneous.txt was not created"
+    );
 }
 
 /// Test: `makehomogeneous -m Mag.nii -d Int32 -o <tmpfile>`
@@ -108,4 +124,8 @@ fn makehomogeneous_datatype_int32() {
         .status()
         .expect("failed to execute makehomogeneous");
     assert!(status.success(), "makehomogeneous exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_makehomogeneous.txt").exists(),
+        "settings_makehomogeneous.txt was not created"
+    );
 }

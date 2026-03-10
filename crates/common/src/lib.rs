@@ -54,11 +54,21 @@ pub fn parse_echo_times(args: &[String]) -> anyhow::Result<Vec<f64>> {
             let start: f64 = parts[0].trim().parse()?;
             let step: f64 = parts[1].trim().parse()?;
             let stop: f64 = parts[2].trim().parse()?;
+            if step == 0.0 {
+                return Err(anyhow::anyhow!("Echo time range step cannot be zero"));
+            }
             let mut tes = vec![];
             let mut t = start;
-            while t <= stop + 1e-9 {
-                tes.push(t);
-                t += step;
+            if step > 0.0 {
+                while t <= stop + 1e-9 {
+                    tes.push(t);
+                    t += step;
+                }
+            } else {
+                while t >= stop - 1e-9 {
+                    tes.push(t);
+                    t += step;
+                }
             }
             return Ok(tes);
         } else if parts.len() == 2 {
@@ -127,6 +137,13 @@ mod tests {
         assert!((tes[0] - 1.0).abs() < 1e-9);
         assert!((tes[1] - 2.0).abs() < 1e-9);
         assert!((tes[2] - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_echo_times_range_zero_step_error() {
+        let args = vec!["1:0:3".to_string()];
+        let result = parse_echo_times(&args);
+        assert!(result.is_err(), "expected error for zero step");
     }
 
     #[test]

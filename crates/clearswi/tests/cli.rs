@@ -44,6 +44,10 @@ fn clearswi_phase_mag_echo_range() {
         .status()
         .expect("failed to execute clearswi");
     assert!(status.success(), "clearswi exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_clearswi.txt").exists(),
+        "settings_clearswi.txt was not created"
+    );
 }
 
 /// Test: `clearswi -p Phase.nii -m Mag.nii -t 1:3 --qsm -o <tmpfile>`
@@ -68,4 +72,8 @@ fn clearswi_phase_mag_echo_range_qsm() {
         .status()
         .expect("failed to execute clearswi");
     assert!(status.success(), "clearswi exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_clearswi.txt").exists(),
+        "settings_clearswi.txt was not created"
+    );
 }

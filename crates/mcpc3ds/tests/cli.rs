@@ -44,6 +44,10 @@ fn mcpc3ds_phase_mag_echo_range() {
         .status()
         .expect("failed to execute mcpc3ds");
     assert!(status.success(), "mcpc3ds exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_mcpc3ds.txt").exists(),
+        "settings_mcpc3ds.txt was not created"
+    );
 }
 
 /// Test: `mcpc3ds -p Phase.nii -m Mag.nii -t 1:3 -N -o <tmpfile>`
@@ -68,6 +72,10 @@ fn mcpc3ds_phase_mag_echo_range_no_mmap() {
         .status()
         .expect("failed to execute mcpc3ds");
     assert!(status.success(), "mcpc3ds exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_mcpc3ds.txt").exists(),
+        "settings_mcpc3ds.txt was not created"
+    );
 }
 
 /// Test: `mcpc3ds -p Phase.nii -m Mag.nii -t 1:3 --write-phase-offsets -o <tmpfile>`
@@ -92,4 +100,8 @@ fn mcpc3ds_phase_mag_write_phase_offsets() {
         .status()
         .expect("failed to execute mcpc3ds");
     assert!(status.success(), "mcpc3ds exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_mcpc3ds.txt").exists(),
+        "settings_mcpc3ds.txt was not created"
+    );
 }

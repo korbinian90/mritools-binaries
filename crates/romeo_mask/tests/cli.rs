@@ -42,6 +42,10 @@ fn romeo_mask_phase_only() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -m Mag.nii -o <tmpfile>`
@@ -65,6 +69,10 @@ fn romeo_mask_with_magnitude() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -e 1 -o <tmpfile>`
@@ -88,6 +96,10 @@ fn romeo_mask_single_echo() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -e "[1, 2]" -o <tmpfile>`
@@ -111,6 +123,10 @@ fn romeo_mask_two_echoes() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -w romeo4 -o <tmpfile>`
@@ -134,6 +150,10 @@ fn romeo_mask_weights_romeo4() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -w bestpath -o <tmpfile>`
@@ -157,6 +177,10 @@ fn romeo_mask_weights_bestpath() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -w 100011 -o <tmpfile>`
@@ -180,6 +204,10 @@ fn romeo_mask_weights_flags() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 --no-phase-rescale -o <tmpfile>`
@@ -202,6 +230,10 @@ fn romeo_mask_no_phase_rescale() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -v -o <tmpfile>`
@@ -224,6 +256,10 @@ fn romeo_mask_verbose() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -Q -o <tmpfile>`
@@ -246,6 +282,10 @@ fn romeo_mask_write_quality_all() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
 
 /// Test: `romeo_mask -p Phase.nii -t 1:3 -q -o <tmpfile>`
@@ -268,4 +308,8 @@ fn romeo_mask_write_quality() {
         .status()
         .expect("failed to execute romeo_mask");
     assert!(status.success(), "romeo_mask exited with: {}", status);
+    assert!(
+        tmpdir.path().join("settings_romeo_mask.txt").exists(),
+        "settings_romeo_mask.txt was not created"
+    );
 }
