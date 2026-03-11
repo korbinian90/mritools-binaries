@@ -239,19 +239,18 @@ fn main() -> Result<()> {
         eprintln!("  MCPC-3D-S phase combination complete");
     }
 
-    // Write output: all corrected phases as 4D
+    // Write output: all corrected phases as 4D (x,y,z,echo)
     let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
         cli.output.clone()
     } else {
         format!("{}.nii", cli.output)
     };
 
-    // Write first corrected echo as main output (3D, matches Julia behavior)
-    write_nifti_from_4d(&out_path, &corrected_phases[0], &phase_4d)
+    write_nifti_4d(&out_path, &corrected_phases, &phase_4d)
         .with_context(|| format!("Failed to write output '{}'", out_path))?;
 
     if cli.verbose {
-        eprintln!("  saved corrected phase to: {}", out_path);
+        eprintln!("  saved corrected phases to: {}", out_path);
     }
 
     // Write phase offsets if requested

@@ -153,6 +153,16 @@ pub fn write_nifti_4d(path: &str, volumes: &[Vec<f64>], nii4d: &NiftiData4D) -> 
     // Concatenate all volumes into a flat array
     let n_voxels = nii4d.dims.0 * nii4d.dims.1 * nii4d.dims.2;
     let nt = volumes.len();
+    for (i, vol) in volumes.iter().enumerate() {
+        if vol.len() != n_voxels {
+            return Err(anyhow::anyhow!(
+                "Volume {} has {} voxels, expected {}",
+                i,
+                vol.len(),
+                n_voxels
+            ));
+        }
+    }
     let mut flat = Vec::with_capacity(n_voxels * nt);
     for vol in volumes {
         flat.extend_from_slice(vol);
@@ -279,6 +289,9 @@ pub fn parse_echo_selection(args: &[String], n_echoes: usize) -> Option<Vec<usiz
                 parts[1].trim().parse::<usize>(),
                 parts[2].trim().parse::<usize>(),
             ) {
+                if step == 0 {
+                    return None; // zero step would loop forever
+                }
                 let mut indices = Vec::new();
                 let mut i = start;
                 while i <= stop {
@@ -365,6 +378,18 @@ pub fn select_volumes(nii: &NiftiData4D, indices: &[usize]) -> NiftiData4D {
         voxel_size: nii.voxel_size,
         affine: nii.affine,
     }
+}
+
+/// Filter echo times to match a set of selected 0-based indices.
+///
+/// Returns a new vector containing only the echo times at the given indices.
+/// Indices that are out of range are silently skipped.
+pub fn select_echo_times(echo_times: &[f64], indices: &[usize]) -> Vec<f64> {
+    indices
+        .iter()
+        .filter(|&&i| i < echo_times.len())
+        .map(|&i| echo_times[i])
+        .collect()
 }
 
 /// Save a human-readable settings file to `<dir>/settings_<tool>.txt`.
@@ -468,5 +493,28 @@ mod tests {
             "slice 1 mean should be close to 0, got {}",
             mean_slice1
         );
+    }
+
+    #[test]
+    fn parse_echo_selection_zero_step() {
+        let args = vec!["1:0:3".to_string()];
+        assert!(
+            parse_echo_selection(&args, 5).is_none(),
+            "zero step should return None"
+        );
+    }
+
+    #[test]
+    fn select_echo_times_basic() {
+        let tes = vec![1.5, 3.0, 4.5, 6.0];
+        let sel = select_echo_times(&tes, &[0, 2]);
+        assert_eq!(sel, vec![1.5, 4.5]);
+    }
+
+    #[test]
+    fn select_echo_times_out_of_range() {
+        let tes = vec![1.5, 3.0];
+        let sel = select_echo_times(&tes, &[0, 5]);
+        assert_eq!(sel, vec![1.5]);
     }
 }

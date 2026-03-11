@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_volumes, write_nifti, write_nifti_4d, NiftiData4D,
+    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d, NiftiData4D,
 };
 use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
@@ -165,13 +165,14 @@ fn main() -> Result<()> {
     }
 
     // Parse echo times
-    let echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+    let mut echo_times =
+        parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
     // Load 4D phase image
     let mut phase_4d = read_nifti_4d(&cli.phase)
         .with_context(|| format!("Failed to read phase image '{}'", cli.phase))?;
 
-    // Apply echo selection
+    // Apply echo selection (filter volumes and echo times with same indices)
     if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, phase_4d.nt) {
         if cli.verbose {
             eprintln!(
@@ -180,6 +181,9 @@ fn main() -> Result<()> {
             );
         }
         phase_4d = select_volumes(&phase_4d, &sel);
+        if !echo_times.is_empty() {
+            echo_times = select_echo_times(&echo_times, &sel);
+        }
     }
 
     let (nx, ny, nz) = phase_4d.dims;
@@ -215,6 +219,13 @@ fn main() -> Result<()> {
         if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, m4d.nt) {
             m4d = select_volumes(&m4d, &sel);
         }
+        if m4d.nt != n_echoes {
+            anyhow::bail!(
+                "After echo selection, magnitude has {} echoes but phase has {}",
+                m4d.nt,
+                n_echoes
+            );
+        }
         Some(m4d)
     } else {
         None
@@ -232,7 +243,7 @@ fn main() -> Result<()> {
         eprintln!("  mask voxels: {}/{}", n_mask, n_voxels);
     }
 
-    // Ensure we have echo times
+    // Ensure we have echo times matching the number of echoes
     let tes: Vec<f64> = if echo_times.len() >= n_echoes {
         echo_times[..n_echoes].to_vec()
     } else if echo_times.is_empty() {

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_volumes, write_nifti,
+    save_settings, select_echo_times, select_volumes, write_nifti,
 };
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
 use qsm_core::utils::otsu_threshold;
@@ -116,13 +116,14 @@ fn main() -> Result<()> {
     save_settings(output_dir, "romeo_mask", &args)?;
 
     // Parse echo times
-    let echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+    let mut echo_times =
+        parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
     // Load 4D phase image
     let mut phase_4d =
         read_nifti_4d(phase).with_context(|| format!("Failed to read phase image '{}'", phase))?;
 
-    // Apply echo selection
+    // Apply echo selection (filter volumes and echo times with same indices)
     if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, phase_4d.nt) {
         if cli.verbose {
             eprintln!(
@@ -131,6 +132,9 @@ fn main() -> Result<()> {
             );
         }
         phase_4d = select_volumes(&phase_4d, &sel);
+        if !echo_times.is_empty() {
+            echo_times = select_echo_times(&echo_times, &sel);
+        }
     }
 
     let (nx, ny, nz) = phase_4d.dims;
@@ -170,7 +174,7 @@ fn main() -> Result<()> {
         vec![]
     };
 
-    // Calculate echo time parameters
+    // Calculate echo time parameters (already filtered to match selected echoes)
     let (te1, te2) = if echo_times.len() >= 2 {
         (echo_times[0], echo_times[1])
     } else if echo_times.len() == 1 {

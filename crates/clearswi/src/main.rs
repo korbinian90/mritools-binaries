@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, save_settings,
-    select_volumes, write_nifti, write_nifti_from_4d, NiftiData, NiftiData4D,
+    select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData, NiftiData4D,
 };
 use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::swi::{calculate_swi, create_mip, softplus_scaling, PhaseScaling};
@@ -155,13 +155,14 @@ fn main() -> Result<()> {
     save_settings(output_dir, "clearswi", &args)?;
 
     // Parse echo times
-    let _echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+    let mut echo_times =
+        parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
     // Load magnitude image (4D)
     let mut mag_4d = read_nifti_4d(magnitude)
         .with_context(|| format!("Failed to read magnitude image '{}'", magnitude))?;
 
-    // Apply echo selection
+    // Apply echo selection (filter volumes and echo times with same indices)
     if let Some(sel) = parse_echo_selection(&cli.echoes, mag_4d.nt) {
         if cli.verbose {
             eprintln!(
@@ -170,6 +171,9 @@ fn main() -> Result<()> {
             );
         }
         mag_4d = select_volumes(&mag_4d, &sel);
+        if !echo_times.is_empty() {
+            echo_times = select_echo_times(&echo_times, &sel);
+        }
     }
 
     let (nx, ny, nz) = mag_4d.dims;
@@ -186,7 +190,7 @@ fn main() -> Result<()> {
     }
 
     // Combine magnitude echoes based on --mag-combine method
-    let mag_combined: Vec<f64> = combine_magnitude(&mag_4d, &cli.mag_combine, &_echo_times);
+    let mag_combined: Vec<f64> = combine_magnitude(&mag_4d, &cli.mag_combine, &echo_times);
 
     // Build mask from combined magnitude
     let mask = robust_mask(&mag_combined);
@@ -209,16 +213,35 @@ fn main() -> Result<()> {
         path => {
             // Load sensitivity from file
             if let Ok(sens_4d) = read_nifti_4d(path) {
-                let sensitivity = &sens_4d.volumes[0];
-                let mut corrected = vec![0.0; n_voxels];
-                for i in 0..n_voxels {
-                    if sensitivity[i] > 1e-10 {
-                        corrected[i] = mag_combined[i] / sensitivity[i];
+                if sens_4d.volumes.len() != 1 {
+                    eprintln!(
+                        "WARNING: sensitivity file '{}' must contain exactly one volume (found {}), skipping correction",
+                        path,
+                        sens_4d.volumes.len()
+                    );
+                    mag_combined.clone()
+                } else {
+                    let sensitivity = &sens_4d.volumes[0];
+                    if sensitivity.len() != n_voxels {
+                        eprintln!(
+                            "WARNING: sensitivity file '{}' has {} voxels, but magnitude image has {}, skipping correction",
+                            path,
+                            sensitivity.len(),
+                            n_voxels
+                        );
+                        mag_combined.clone()
                     } else {
-                        corrected[i] = mag_combined[i];
+                        let mut corrected = vec![0.0; n_voxels];
+                        for i in 0..n_voxels {
+                            if sensitivity[i] > 1e-10 {
+                                corrected[i] = mag_combined[i] / sensitivity[i];
+                            } else {
+                                corrected[i] = mag_combined[i];
+                            }
+                        }
+                        corrected
                     }
                 }
-                corrected
             } else {
                 eprintln!(
                     "WARNING: could not load sensitivity file '{}', skipping correction",
@@ -463,10 +486,7 @@ fn combine_magnitude(mag_4d: &NiftiData4D, method: &[String], echo_times: &[f64]
                     .iter()
                     .enumerate()
                     .min_by(|(_, a), (_, b)| {
-                        (*a - target_te)
-                            .abs()
-                            .partial_cmp(&(*b - target_te).abs())
-                            .unwrap()
+                        (*a - target_te).abs().total_cmp(&(*b - target_te).abs())
                     })
                     .map(|(i, _)| i)
                     .unwrap_or(0)
