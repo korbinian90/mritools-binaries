@@ -3,15 +3,56 @@
 //! Provides NIfTI I/O helpers and other common functions shared across the
 //! romeo, clearswi, mcpc3ds, makehomogeneous and romeo_mask binaries.
 
-pub use qsm_core::nifti_io::{load_nifti, save_nifti, NiftiData};
+pub use qsm_core::nifti_io::{load_nifti, load_nifti_4d, save_nifti, NiftiData};
 
 /// Read a NIfTI file from disk and return a [`NiftiData`] struct.
 ///
-/// Supports both `.nii` and `.nii.gz` files.
+/// Supports both `.nii` and `.nii.gz` files. For 4D data, returns only the
+/// first 3D volume; use [`read_nifti_4d`] for multi-echo data.
 pub fn read_nifti(path: &str) -> anyhow::Result<NiftiData> {
     let bytes =
         std::fs::read(path).map_err(|e| anyhow::anyhow!("Cannot open '{}': {}", path, e))?;
     load_nifti(&bytes).map_err(|e| anyhow::anyhow!("Failed to parse NIfTI '{}': {}", path, e))
+}
+
+/// 4D NIfTI data loaded from bytes.
+pub struct NiftiData4D {
+    /// Volume data for each time point / echo.
+    pub volumes: Vec<Vec<f64>>,
+    /// 3D dimensions (nx, ny, nz).
+    pub dims: (usize, usize, usize),
+    /// Number of time points / echoes.
+    pub nt: usize,
+    /// Voxel sizes in mm.
+    pub voxel_size: (f64, f64, f64),
+    /// Affine transformation matrix (4×4, row-major).
+    pub affine: [f64; 16],
+}
+
+/// Read a 4D NIfTI file from disk and return a [`NiftiData4D`] struct.
+///
+/// The data is split into per-echo volumes.
+pub fn read_nifti_4d(path: &str) -> anyhow::Result<NiftiData4D> {
+    let bytes =
+        std::fs::read(path).map_err(|e| anyhow::anyhow!("Cannot open '{}': {}", path, e))?;
+    let (data, (nx, ny, nz, nt), voxel_size, affine) = load_nifti_4d(&bytes)
+        .map_err(|e| anyhow::anyhow!("Failed to parse 4D NIfTI '{}': {}", path, e))?;
+
+    let n_voxels = nx * ny * nz;
+    let mut volumes = Vec::with_capacity(nt);
+    for t in 0..nt {
+        let start = t * n_voxels;
+        let end = start + n_voxels;
+        volumes.push(data[start..end].to_vec());
+    }
+
+    Ok(NiftiData4D {
+        volumes,
+        dims: (nx, ny, nz),
+        nt,
+        voxel_size,
+        affine,
+    })
 }
 
 /// Write a NIfTI file to disk.
@@ -20,6 +61,14 @@ pub fn read_nifti(path: &str) -> anyhow::Result<NiftiData> {
 /// as appropriate.
 pub fn write_nifti(path: &str, nii: &NiftiData) -> anyhow::Result<()> {
     let bytes = save_nifti(&nii.data, nii.dims, nii.voxel_size, &nii.affine)
+        .map_err(|e| anyhow::anyhow!("Failed to encode NIfTI '{}': {}", path, e))?;
+    std::fs::write(path, bytes).map_err(|e| anyhow::anyhow!("Cannot write '{}': {}", path, e))?;
+    Ok(())
+}
+
+/// Write a 3D data array as a NIfTI file, using the header info from a [`NiftiData4D`].
+pub fn write_nifti_from_4d(path: &str, data: &[f64], nii4d: &NiftiData4D) -> anyhow::Result<()> {
+    let bytes = save_nifti(data, nii4d.dims, nii4d.voxel_size, &nii4d.affine)
         .map_err(|e| anyhow::anyhow!("Failed to encode NIfTI '{}': {}", path, e))?;
     std::fs::write(path, bytes).map_err(|e| anyhow::anyhow!("Cannot write '{}': {}", path, e))?;
     Ok(())
