@@ -9,8 +9,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{parse_echo_times, read_nifti, write_nifti};
-use qsm_core::unwrap::romeo::calculate_weights_romeo;
+use mritools_common::{
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
+    save_settings, select_echo_times, select_volumes, write_nifti,
+};
+use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
 use qsm_core::utils::otsu_threshold;
 
 /// ROMEO quality-based brain masking.
@@ -76,22 +79,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Warn about flags that are accepted for CLI compatibility but not yet implemented
-    if cli.unwrap_echoes.len() != 1 || cli.unwrap_echoes[0] != ":" {
-        eprintln!(
-            "WARNING: --unwrap-echoes is not yet implemented in this Rust port, loading all echoes"
-        );
-    }
-    if cli.weights != "romeo" {
-        eprintln!(
-            "WARNING: --weights '{}' variant is not yet implemented, using default romeo weights",
-            cli.weights
-        );
-    }
-    if cli.fix_ge_phase {
-        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
-    }
-
     // Validate factor range
     if cli.factor < 0.0 || cli.factor > 1.0 {
         anyhow::bail!("--factor must be in [0, 1], got {}", cli.factor);
@@ -126,22 +113,47 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    mritools_common::save_settings(output_dir, "romeo_mask", &args)?;
+    save_settings(output_dir, "romeo_mask", &args)?;
 
     // Parse echo times
-    let echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+    let mut echo_times =
+        parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
-    // Load phase image
-    let phase_nii =
-        read_nifti(phase).with_context(|| format!("Failed to read phase image '{}'", phase))?;
+    // Load 4D phase image
+    let mut phase_4d =
+        read_nifti_4d(phase).with_context(|| format!("Failed to read phase image '{}'", phase))?;
 
-    let (nx, ny, nz) = phase_nii.dims;
+    // Apply echo selection (filter volumes and echo times with same indices)
+    if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, phase_4d.nt) {
+        if cli.verbose {
+            eprintln!(
+                "  selecting echoes: {:?} (1-based)",
+                sel.iter().map(|i| i + 1).collect::<Vec<_>>()
+            );
+        }
+        phase_4d = select_volumes(&phase_4d, &sel);
+        if !echo_times.is_empty() {
+            echo_times = select_echo_times(&echo_times, &sel);
+        }
+    }
+
+    let (nx, ny, nz) = phase_4d.dims;
     let n_voxels = nx * ny * nz;
 
+    // Use first echo for masking
+    let mut phase_data = phase_4d.volumes[0].clone();
+
     // Rescale phase to [-π; π] if needed
-    let mut phase_data = phase_nii.data.clone();
     if !cli.no_phase_rescale {
         rescale_phase(&mut phase_data);
+    }
+
+    // Fix GE phase if requested
+    if cli.fix_ge_phase {
+        fix_ge_phase_slices(&mut phase_data, nx, ny, nz);
+        if cli.verbose {
+            eprintln!("  applied GE phase slice-jump correction");
+        }
     }
 
     // Load magnitude image if provided
@@ -149,12 +161,11 @@ fn main() -> Result<()> {
         let mag_nii = read_nifti(mag_path)
             .with_context(|| format!("Failed to read magnitude image '{}'", mag_path))?;
 
-        // Validate dimensions match phase
-        if mag_nii.dims != phase_nii.dims {
+        if mag_nii.dims != phase_4d.dims {
             anyhow::bail!(
                 "Magnitude image dimensions {:?} do not match phase dimensions {:?}",
                 mag_nii.dims,
-                phase_nii.dims
+                phase_4d.dims
             );
         }
 
@@ -163,7 +174,7 @@ fn main() -> Result<()> {
         vec![]
     };
 
-    // Calculate echo time parameters
+    // Calculate echo time parameters (already filtered to match selected echoes)
     let (te1, te2) = if echo_times.len() >= 2 {
         (echo_times[0], echo_times[1])
     } else if echo_times.len() == 1 {
@@ -179,17 +190,29 @@ fn main() -> Result<()> {
         vec![1u8; n_voxels]
     };
 
-    // Calculate ROMEO weights
-    let weights = calculate_weights_romeo(
+    // Get second echo phase for better weights if available
+    let phase2 = if phase_4d.nt >= 2 {
+        let mut p2 = phase_4d.volumes[1].clone();
+        if !cli.no_phase_rescale {
+            rescale_phase(&mut p2);
+        }
+        Some(p2)
+    } else {
+        None
+    };
+
+    // Calculate ROMEO weights with configurable method
+    let weights = calculate_weights_with_config(
         &phase_data,
         &mag_data,
-        None,
+        phase2.as_deref(),
         te1,
         te2,
         &initial_mask,
         nx,
         ny,
         nz,
+        &cli.weights,
     );
 
     // Compute per-voxel quality map from weights
@@ -202,7 +225,6 @@ fn main() -> Result<()> {
     }
 
     // Threshold the quality map to create a mask
-    // Use Otsu threshold scaled by the factor parameter
     let threshold = otsu_threshold(&quality, 256) * (1.0 - cli.factor);
 
     let mask: Vec<f64> = quality
@@ -224,7 +246,7 @@ fn main() -> Result<()> {
         format!("{}.nii", cli.output)
     };
 
-    let mut out_nii = phase_nii;
+    let mut out_nii = read_nifti(phase)?;
     out_nii.data = mask;
     write_nifti(&out_path, &out_nii)
         .with_context(|| format!("Failed to write output '{}'", out_path))?;
@@ -235,7 +257,7 @@ fn main() -> Result<()> {
 
     // Write quality map if requested
     if cli.write_quality {
-        let mut q_nii = mritools_common::read_nifti(phase)?;
+        let mut q_nii = read_nifti(phase)?;
         q_nii.data = quality.clone();
         let q_path = derive_path(&out_path, "quality");
         write_nifti(&q_path, &q_nii)?;
@@ -252,7 +274,7 @@ fn main() -> Result<()> {
             for idx in 0..per_dim.min(n_voxels) {
                 q_data[idx] = weights[d * per_dim + idx] as f64 / 255.0;
             }
-            let mut q_nii = mritools_common::read_nifti(phase)?;
+            let mut q_nii = read_nifti(phase)?;
             q_nii.data = q_data;
             let q_path = derive_path(&out_path, name);
             write_nifti(&q_path, &q_nii)?;
@@ -263,6 +285,62 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Calculate weights using the specified weight configuration.
+#[allow(clippy::too_many_arguments)]
+fn calculate_weights_with_config(
+    phase: &[f64],
+    mag: &[f64],
+    phase2: Option<&[f64]>,
+    te1: f64,
+    te2: f64,
+    mask: &[u8],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    weights_name: &str,
+) -> Vec<u8> {
+    match weights_name.to_lowercase().as_str() {
+        "romeo" | "romeo6" => {
+            calculate_weights_romeo(phase, mag, phase2, te1, te2, mask, nx, ny, nz)
+        }
+        "romeo4" => calculate_weights_romeo_configurable(
+            phase, mag, phase2, te1, te2, mask, nx, ny, nz, true, true, false,
+        ),
+        "romeo3" => calculate_weights_romeo_configurable(
+            phase, mag, phase2, te1, te2, mask, nx, ny, nz, true, false, true,
+        ),
+        "romeo2" => calculate_weights_romeo_configurable(
+            phase, mag, phase2, te1, te2, mask, nx, ny, nz, true, false, false,
+        ),
+        "bestpath" => calculate_weights_romeo_configurable(
+            phase, mag, phase2, te1, te2, mask, nx, ny, nz, false, false, true,
+        ),
+        other => {
+            // Interpret as binary flags (≥3 chars of '0'/'1').
+            // Positions: [0] phase_gradient_coherence, [1] mag_coherence, [2] mag_weight.
+            if other.len() >= 3 && other.chars().all(|c| c == '0' || c == '1') {
+                let flags: Vec<bool> = other.chars().map(|c| c == '1').collect();
+                calculate_weights_romeo_configurable(
+                    phase,
+                    mag,
+                    phase2,
+                    te1,
+                    te2,
+                    mask,
+                    nx,
+                    ny,
+                    nz,
+                    flags[0],
+                    flags.get(1).copied().unwrap_or(false),
+                    flags.get(2).copied().unwrap_or(false),
+                )
+            } else {
+                calculate_weights_romeo(phase, mag, phase2, te1, te2, mask, nx, ny, nz)
+            }
+        }
+    }
 }
 
 /// Rescale phase data to the range [-π, π].
@@ -290,7 +368,7 @@ fn robust_mask(mag: &[f64]) -> Vec<u8> {
         .collect()
 }
 
-/// Compute a per-voxel quality map from the edge weights (average of adjacent edges).
+/// Compute a per-voxel quality map from the edge weights.
 fn compute_quality_map(weights: &[u8], n_voxels: usize) -> Vec<f64> {
     let n_w = weights.len();
     let per_dim = n_w / 3;

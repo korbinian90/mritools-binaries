@@ -8,9 +8,15 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{parse_echo_times, read_nifti_4d, write_nifti, NiftiData};
+use mritools_common::{
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, save_settings,
+    select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData, NiftiData4D,
+};
+use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::swi::{calculate_swi, create_mip, softplus_scaling, PhaseScaling};
 use qsm_core::unwrap::laplacian::laplacian_unwrap;
+use qsm_core::unwrap::romeo::calculate_weights_romeo;
+use qsm_core::utils::get_sensitivity;
 
 /// CLEAR-SWI susceptibility weighted imaging.
 ///
@@ -107,9 +113,9 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Warn about flags that are accepted for CLI compatibility but not yet implemented
+    // Warn about flags that require external QSM pipeline
     if cli.qsm {
-        eprintln!("WARNING: --qsm is not yet implemented in this Rust port, ignoring");
+        eprintln!("WARNING: --qsm TGV pipeline is not yet implemented in this Rust port, ignoring");
     }
     if cli.qsm_input.is_some() {
         eprintln!("WARNING: --qsm-input is not yet implemented in this Rust port, ignoring");
@@ -117,33 +123,11 @@ fn main() -> Result<()> {
     if cli.qsm_mask.is_some() {
         eprintln!("WARNING: --qsm-mask is not yet implemented in this Rust port, ignoring");
     }
-    if cli.mag_combine.len() != 1 || cli.mag_combine[0] != "SNR" {
-        eprintln!("WARNING: --mag-combine is not yet implemented in this Rust port, using default");
-    }
-    if cli.mag_sensitivity_correction != "on" {
-        eprintln!("WARNING: --mag-sensitivity-correction is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.unwrapping_algorithm != "laplacian" {
-        eprintln!(
-            "WARNING: --unwrapping-algorithm '{}' is not yet implemented, using laplacian",
-            cli.unwrapping_algorithm
-        );
-    }
-    if cli.echoes.len() != 1 || cli.echoes[0] != ":" {
-        eprintln!("WARNING: --echoes is not yet implemented in this Rust port, loading all echoes");
-    }
-    if cli.fix_ge_phase {
-        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.writesteps.is_some() {
-        eprintln!("WARNING: --writesteps is not yet implemented in this Rust port, ignoring");
-    }
 
     let magnitude = cli
         .magnitude
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("--magnitude / -m is required"))?;
-    let _phase = cli.phase.as_deref();
 
     if cli.verbose {
         eprintln!("CLEAR-SWI");
@@ -168,14 +152,29 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    mritools_common::save_settings(output_dir, "clearswi", &args)?;
+    save_settings(output_dir, "clearswi", &args)?;
 
     // Parse echo times
-    let _echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+    let mut echo_times =
+        parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
     // Load magnitude image (4D)
-    let mag_4d = read_nifti_4d(magnitude)
+    let mut mag_4d = read_nifti_4d(magnitude)
         .with_context(|| format!("Failed to read magnitude image '{}'", magnitude))?;
+
+    // Apply echo selection (filter volumes and echo times with same indices)
+    if let Some(sel) = parse_echo_selection(&cli.echoes, mag_4d.nt) {
+        if cli.verbose {
+            eprintln!(
+                "  selecting echoes: {:?} (1-based)",
+                sel.iter().map(|i| i + 1).collect::<Vec<_>>()
+            );
+        }
+        mag_4d = select_volumes(&mag_4d, &sel);
+        if !echo_times.is_empty() {
+            echo_times = select_echo_times(&echo_times, &sel);
+        }
+    }
 
     let (nx, ny, nz) = mag_4d.dims;
     let (vsx, vsy, vsz) = mag_4d.voxel_size;
@@ -190,27 +189,88 @@ fn main() -> Result<()> {
         anyhow::bail!("Magnitude image contains no volumes");
     }
 
-    // Combine magnitude echoes (SNR-like: root sum of squares)
-    let mag_combined: Vec<f64> = if mag_4d.nt > 1 {
-        let mut combined = vec![0.0f64; n_voxels];
-        for vol in &mag_4d.volumes {
-            for (c, &v) in combined.iter_mut().zip(vol.iter()) {
-                *c += v * v;
-            }
-        }
-        combined.iter_mut().for_each(|c| *c = c.sqrt());
-        combined
-    } else {
-        mag_4d.volumes[0].clone()
-    };
+    // Combine magnitude echoes based on --mag-combine method
+    let mag_combined: Vec<f64> = combine_magnitude(&mag_4d, &cli.mag_combine, &echo_times);
 
     // Build mask from combined magnitude
     let mask = robust_mask(&mag_combined);
 
+    // Apply magnitude sensitivity correction
+    let mag_corrected: Vec<f64> = match cli.mag_sensitivity_correction.as_str() {
+        "off" => mag_combined.clone(),
+        "on" => {
+            let sensitivity = get_sensitivity(&mag_combined, nx, ny, nz, vsx, vsy, vsz, 7.0, 15);
+            let mut corrected = vec![0.0; n_voxels];
+            for i in 0..n_voxels {
+                if sensitivity[i] > 1e-10 {
+                    corrected[i] = mag_combined[i] / sensitivity[i];
+                } else {
+                    corrected[i] = mag_combined[i];
+                }
+            }
+            corrected
+        }
+        path => {
+            // Load sensitivity from file
+            if let Ok(sens_4d) = read_nifti_4d(path) {
+                if sens_4d.volumes.len() != 1 {
+                    eprintln!(
+                        "WARNING: sensitivity file '{}' must contain exactly one volume (found {}), skipping correction",
+                        path,
+                        sens_4d.volumes.len()
+                    );
+                    mag_combined.clone()
+                } else {
+                    let sensitivity = &sens_4d.volumes[0];
+                    if sensitivity.len() != n_voxels {
+                        eprintln!(
+                            "WARNING: sensitivity file '{}' has {} voxels, but magnitude image has {}, skipping correction",
+                            path,
+                            sensitivity.len(),
+                            n_voxels
+                        );
+                        mag_combined.clone()
+                    } else {
+                        let mut corrected = vec![0.0; n_voxels];
+                        for i in 0..n_voxels {
+                            if sensitivity[i] > 1e-10 {
+                                corrected[i] = mag_combined[i] / sensitivity[i];
+                            } else {
+                                corrected[i] = mag_combined[i];
+                            }
+                        }
+                        corrected
+                    }
+                }
+            } else {
+                eprintln!(
+                    "WARNING: could not load sensitivity file '{}', skipping correction",
+                    path
+                );
+                mag_combined.clone()
+            }
+        }
+    };
+
+    // Setup writesteps directory if requested
+    let writesteps_dir = cli.writesteps.as_deref();
+    if let Some(dir) = writesteps_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+
+        // Save combined magnitude
+        write_step(dir, "mag_combined", &mag_corrected, &mag_4d)?;
+    }
+
     // Get phase data (load and unwrap, or default to zeros if no phase provided)
     let unwrapped_phase: Vec<f64> = if let Some(ref phase_path) = cli.phase {
-        let phase_4d = read_nifti_4d(phase_path)
+        let mut phase_4d = read_nifti_4d(phase_path)
             .with_context(|| format!("Failed to read phase image '{}'", phase_path))?;
+
+        // Apply echo selection to phase too
+        if let Some(sel) = parse_echo_selection(&cli.echoes, phase_4d.nt) {
+            phase_4d = select_volumes(&phase_4d, &sel);
+        }
 
         // Validate dimensions match magnitude
         if phase_4d.dims != mag_4d.dims {
@@ -232,8 +292,29 @@ fn main() -> Result<()> {
             rescale_phase(&mut phase_data);
         }
 
-        // Unwrap phase
-        laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz)
+        // Fix GE phase if requested
+        if cli.fix_ge_phase {
+            fix_ge_phase_slices(&mut phase_data, nx, ny, nz);
+            if cli.verbose {
+                eprintln!("  applied GE phase slice-jump correction");
+            }
+        }
+
+        if let Some(dir) = writesteps_dir {
+            write_step(dir, "phase_rescaled", &phase_data, &mag_4d)?;
+        }
+
+        // Unwrap phase using selected algorithm
+        let unwrapped = match cli.unwrapping_algorithm.to_lowercase().as_str() {
+            "romeo" => unwrap_romeo(&phase_data, &mag_corrected, &mask, nx, ny, nz),
+            _ => laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz),
+        };
+
+        if let Some(dir) = writesteps_dir {
+            write_step(dir, "phase_unwrapped", &unwrapped, &mag_4d)?;
+        }
+
+        unwrapped
     } else {
         vec![0.0; n_voxels]
     };
@@ -264,7 +345,7 @@ fn main() -> Result<()> {
     // Calculate SWI
     let mut swi = calculate_swi(
         &unwrapped_phase,
-        &mag_combined,
+        &mag_corrected,
         &mask,
         nx,
         ny,
@@ -279,8 +360,7 @@ fn main() -> Result<()> {
 
     // Apply softplus scaling if enabled
     if cli.mag_softplus_scaling != "off" {
-        // Estimate offset from magnitude (median of masked values)
-        let masked_vals: Vec<f64> = mag_combined
+        let masked_vals: Vec<f64> = mag_corrected
             .iter()
             .zip(mask.iter())
             .filter_map(|(&v, &m)| if m > 0 { Some(v) } else { None })
@@ -295,6 +375,10 @@ fn main() -> Result<()> {
 
     if cli.verbose {
         eprintln!("  SWI calculation complete");
+    }
+
+    if let Some(dir) = writesteps_dir {
+        write_step(dir, "swi_unscaled", &swi, &mag_4d)?;
     }
 
     // Write SWI output
@@ -326,7 +410,7 @@ fn main() -> Result<()> {
         if !mip.is_empty() {
             let nz_mip = nz - mip_window + 1;
             let mip_path = derive_path(&out_path, "mip");
-            let mip_nii = mritools_common::NiftiData {
+            let mip_nii = NiftiData {
                 data: mip,
                 dims: (nx, ny, nz_mip),
                 voxel_size: mag_4d.voxel_size,
@@ -342,6 +426,126 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Combine magnitude echoes according to the specified method.
+fn combine_magnitude(mag_4d: &NiftiData4D, method: &[String], echo_times: &[f64]) -> Vec<f64> {
+    let n_voxels = mag_4d.dims.0 * mag_4d.dims.1 * mag_4d.dims.2;
+
+    let method_str = method
+        .first()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "snr".to_string());
+
+    match method_str.as_str() {
+        "snr" => {
+            // Root sum of squares
+            if mag_4d.nt > 1 {
+                let mut combined = vec![0.0f64; n_voxels];
+                for vol in &mag_4d.volumes {
+                    for (c, &v) in combined.iter_mut().zip(vol.iter()) {
+                        *c += v * v;
+                    }
+                }
+                combined.iter_mut().for_each(|c| *c = c.sqrt());
+                combined
+            } else {
+                mag_4d.volumes[0].clone()
+            }
+        }
+        "average" => {
+            // Average across echoes
+            if mag_4d.nt > 1 {
+                let mut combined = vec![0.0f64; n_voxels];
+                for vol in &mag_4d.volumes {
+                    for (c, &v) in combined.iter_mut().zip(vol.iter()) {
+                        *c += v;
+                    }
+                }
+                let nt = mag_4d.nt as f64;
+                combined.iter_mut().for_each(|c| *c /= nt);
+                combined
+            } else {
+                mag_4d.volumes[0].clone()
+            }
+        }
+        "echo" => {
+            // Select specific echo number
+            let echo_num: usize = method.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let idx = (echo_num - 1).min(mag_4d.nt - 1);
+            mag_4d.volumes[idx].clone()
+        }
+        "se" => {
+            // Select echo closest to specified TE
+            let target_te: f64 = method.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            if echo_times.is_empty() {
+                mag_4d.volumes[0].clone()
+            } else {
+                let idx = echo_times
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        (*a - target_te).abs().total_cmp(&(*b - target_te).abs())
+                    })
+                    .map(|(i, _)| i)
+                    .unwrap_or(0)
+                    .min(mag_4d.nt - 1);
+                mag_4d.volumes[idx].clone()
+            }
+        }
+        _ => {
+            // Default: SNR
+            if mag_4d.nt > 1 {
+                let mut combined = vec![0.0f64; n_voxels];
+                for vol in &mag_4d.volumes {
+                    for (c, &v) in combined.iter_mut().zip(vol.iter()) {
+                        *c += v * v;
+                    }
+                }
+                combined.iter_mut().for_each(|c| *c = c.sqrt());
+                combined
+            } else {
+                mag_4d.volumes[0].clone()
+            }
+        }
+    }
+}
+
+/// Unwrap phase using ROMEO algorithm (instead of Laplacian).
+fn unwrap_romeo(
+    phase: &[f64],
+    mag: &[f64],
+    mask: &[u8],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+) -> Vec<f64> {
+    let weights = calculate_weights_romeo(phase, mag, None, 1.0, 1.0, mask, nx, ny, nz);
+
+    let mut unwrapped = phase.to_vec();
+    let mut mask_work = mask.to_vec();
+
+    let seed = find_seed(mask, &weights, nx, ny, nz);
+    grow_region_unwrap(
+        &mut unwrapped,
+        &weights,
+        &mut mask_work,
+        nx,
+        ny,
+        nz,
+        seed.0,
+        seed.1,
+        seed.2,
+    );
+
+    unwrapped
+}
+
+/// Write an intermediate step NIfTI file.
+fn write_step(dir: &str, name: &str, data: &[f64], nii4d: &NiftiData4D) -> Result<()> {
+    let path = std::path::Path::new(dir).join(format!("{}.nii", name));
+    write_nifti_from_4d(path.to_str().unwrap(), data, nii4d)?;
     Ok(())
 }
 
@@ -405,6 +609,34 @@ fn compute_median(values: &[f64]) -> f64 {
     } else {
         sorted[n / 2]
     }
+}
+
+/// Find the seed voxel for ROMEO unwrapping.
+fn find_seed(
+    mask: &[u8],
+    _weights: &[u8],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+) -> (usize, usize, usize) {
+    let ci = nx / 2;
+    let cj = ny / 2;
+    let ck = nz / 2;
+    let center_idx = ci + cj * nx + ck * nx * ny;
+    if mask.len() > center_idx && mask[center_idx] == 1 {
+        return (ci, cj, ck);
+    }
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                let idx = i + j * nx + k * nx * ny;
+                if mask.len() > idx && mask[idx] == 1 {
+                    return (i, j, k);
+                }
+            }
+        }
+    }
+    (0, 0, 0)
 }
 
 /// Derive a side-output path by inserting a suffix before the `.nii` extension.

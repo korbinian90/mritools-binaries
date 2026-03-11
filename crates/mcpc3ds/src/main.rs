@@ -9,7 +9,10 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{parse_echo_times, read_nifti_4d, write_nifti_from_4d};
+use mritools_common::{
+    fix_ge_phase_slices, parse_echo_times, read_nifti_4d, save_settings, write_nifti_4d,
+    write_nifti_from_4d,
+};
 use qsm_core::utils::mcpc3ds_single_coil;
 
 /// MCPC-3D-S multi-channel phase combination.
@@ -71,17 +74,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Warn about flags that are accepted for CLI compatibility but not yet implemented
-    if cli.bipolar {
-        eprintln!("WARNING: --bipolar is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.fix_ge_phase {
-        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.writesteps.is_some() {
-        eprintln!("WARNING: --writesteps is not yet implemented in this Rust port, ignoring");
-    }
-
     let phase = cli
         .phase
         .as_deref()
@@ -110,7 +102,13 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    mritools_common::save_settings(output_dir, "mcpc3ds", &args)?;
+    save_settings(output_dir, "mcpc3ds", &args)?;
+
+    // Setup writesteps directory if requested
+    if let Some(ref dir) = cli.writesteps {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+    }
 
     // Parse echo times
     let echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
@@ -131,7 +129,6 @@ fn main() -> Result<()> {
     let tes: Vec<f64> = if echo_times.len() >= n_echoes {
         echo_times[..n_echoes].to_vec()
     } else if echo_times.is_empty() {
-        // Default: assume equal spacing
         (1..=n_echoes).map(|i| i as f64).collect()
     } else {
         echo_times.clone()
@@ -145,12 +142,21 @@ fn main() -> Result<()> {
         }
     }
 
+    // Fix GE phase if requested
+    if cli.fix_ge_phase {
+        for vol in &mut phases {
+            fix_ge_phase_slices(vol, nx, ny, nz);
+        }
+        if cli.verbose {
+            eprintln!("  applied GE phase slice-jump correction");
+        }
+    }
+
     // Load magnitude image if provided
     let mags: Vec<Vec<f64>> = if let Some(ref mag_path) = cli.magnitude {
         let mag_4d = read_nifti_4d(mag_path)
             .with_context(|| format!("Failed to read magnitude image '{}'", mag_path))?;
 
-        // Validate dimensions match phase
         if mag_4d.dims != phase_4d.dims {
             anyhow::bail!(
                 "Magnitude image dimensions {:?} do not match phase dimensions {:?}",
@@ -191,26 +197,60 @@ fn main() -> Result<()> {
         anyhow::bail!("MCPC-3D-S requires at least 2 echoes, got {}", n_echoes);
     }
 
+    // Save input phases if writesteps requested
+    if let Some(ref dir) = cli.writesteps {
+        write_nifti_4d(&format!("{}/input_phases.nii", dir), &phases, &phase_4d)?;
+    }
+
     // Run MCPC-3D-S
-    let (corrected_phases, phase_offset) =
+    let (mut corrected_phases, phase_offset) =
         mcpc3ds_single_coil(&phases, &mags, &tes, &mask, sigma, [0, 1], nx, ny, nz);
+
+    // Save intermediate offset if writesteps requested
+    if let Some(ref dir) = cli.writesteps {
+        write_nifti_from_4d(
+            &format!("{}/phase_offset.nii", dir),
+            &phase_offset,
+            &phase_4d,
+        )?;
+    }
+
+    // Bipolar correction: correct eddy current effects in even echoes
+    if cli.bipolar && n_echoes >= 3 {
+        bipolar_correction(&mut corrected_phases, &mask, n_voxels);
+        if cli.verbose {
+            eprintln!("  applied bipolar correction");
+        }
+        if let Some(ref dir) = cli.writesteps {
+            write_nifti_4d(
+                &format!("{}/corrected_bipolar.nii", dir),
+                &corrected_phases,
+                &phase_4d,
+            )?;
+        }
+    } else if cli.bipolar && n_echoes < 3 {
+        eprintln!(
+            "WARNING: --bipolar requires >= 3 echoes, got {}, skipping",
+            n_echoes
+        );
+    }
 
     if cli.verbose {
         eprintln!("  MCPC-3D-S phase combination complete");
     }
 
-    // Write corrected phases (first echo as main output)
+    // Write output: all corrected phases as 4D (x,y,z,echo)
     let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
         cli.output.clone()
     } else {
         format!("{}.nii", cli.output)
     };
 
-    write_nifti_from_4d(&out_path, &corrected_phases[0], &phase_4d)
+    write_nifti_4d(&out_path, &corrected_phases, &phase_4d)
         .with_context(|| format!("Failed to write output '{}'", out_path))?;
 
     if cli.verbose {
-        eprintln!("  saved corrected phase to: {}", out_path);
+        eprintln!("  saved corrected phases to: {}", out_path);
     }
 
     // Write phase offsets if requested
@@ -224,6 +264,54 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Apply bipolar correction for eddy current effects.
+///
+/// Estimates the eddy current phase from the difference between odd and even
+/// echoes and subtracts it from the even echoes.
+fn bipolar_correction(phases: &mut [Vec<f64>], mask: &[u8], n_voxels: usize) {
+    let n_echoes = phases.len();
+    if n_echoes < 3 {
+        return;
+    }
+
+    // Estimate eddy current phase from odd-index echoes.
+    // For each odd echo e (0-based: 1, 3, …) that has neighbours e-1 and e+1,
+    // compute the deviation from the linear interpolation of its even neighbours:
+    //   eddy[i] += phase[e][i] - (phase[e-1][i] + phase[e+1][i]) / 2
+    // The average deviation is then subtracted from all odd echoes.
+    let mut eddy_phase = vec![0.0f64; n_voxels];
+    let mut count = 0;
+
+    // Use odd-numbered echoes (0-based: 1, 3, 5, ...) vs even-numbered (0, 2, 4, ...)
+    for e in (1..n_echoes).step_by(2) {
+        if e + 1 < n_echoes {
+            for i in 0..n_voxels {
+                if mask[i] > 0 {
+                    // Expected linear phase from even echoes interpolated
+                    let expected = (phases[e - 1][i] + phases[e + 1][i]) / 2.0;
+                    eddy_phase[i] += phases[e][i] - expected;
+                }
+            }
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        for v in eddy_phase.iter_mut().take(n_voxels) {
+            *v /= count as f64;
+        }
+
+        // Subtract eddy current phase from odd echoes (1-based: 2, 4, 6, ...)
+        for e in (1..n_echoes).step_by(2) {
+            for i in 0..n_voxels {
+                if mask[i] > 0 {
+                    phases[e][i] -= eddy_phase[i];
+                }
+            }
+        }
+    }
 }
 
 /// Rescale phase data to the range [-π, π].

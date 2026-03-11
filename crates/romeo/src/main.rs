@@ -9,9 +9,13 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{parse_echo_times, read_nifti, save_settings, write_nifti};
+use mritools_common::{
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
+    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d, NiftiData4D,
+};
 use qsm_core::region_grow::grow_region_unwrap;
-use qsm_core::unwrap::romeo::calculate_weights_romeo;
+use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
+use qsm_core::utils::{mcpc3ds_b0_pipeline, mcpc3ds_single_coil, B0WeightType};
 
 /// ROMEO phase unwrapping.
 ///
@@ -138,48 +142,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Warn about flags that are accepted for CLI compatibility but not yet implemented
-    if cli.unwrap_echoes.len() != 1 || cli.unwrap_echoes[0] != ":" {
-        eprintln!(
-            "WARNING: --unwrap-echoes is not yet implemented in this Rust port, loading all echoes"
-        );
-    }
-    if cli.compute_b0.is_some() {
-        eprintln!("WARNING: --compute-B0 is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.b0_phase_weighting != "phase_snr" {
-        eprintln!(
-            "WARNING: --B0-phase-weighting is not yet implemented in this Rust port, ignoring"
-        );
-    }
-    if cli.phase_offset_correction.is_some() {
-        eprintln!(
-            "WARNING: --phase-offset-correction is not yet implemented in this Rust port, ignoring"
-        );
-    }
-    if !cli.phase_offset_smoothing_sigma_mm.is_empty() {
-        eprintln!("WARNING: --phase-offset-smoothing-sigma-mm is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.write_phase_offsets {
-        eprintln!(
-            "WARNING: --write-phase-offsets is not yet implemented in this Rust port, ignoring"
-        );
-    }
-    if cli.individual_unwrapping {
-        eprintln!(
-            "WARNING: --individual-unwrapping is not yet implemented in this Rust port, ignoring"
-        );
-    }
-    if cli.template != 1 {
-        eprintln!("WARNING: --template is not yet implemented in this Rust port, using default");
-    }
-    if cli.fix_ge_phase {
-        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.max_seeds > 1 {
-        eprintln!(
-            "WARNING: --max-seeds > 1 is not yet implemented in this Rust port, using 1 seed"
-        );
-    }
     if cli.merge_regions {
         eprintln!("WARNING: --merge-regions is not yet implemented in this Rust port, ignoring");
     }
@@ -192,11 +154,6 @@ fn main() -> Result<()> {
     if cli.temporal_uncertain_unwrapping != 0.0 {
         eprintln!("WARNING: --temporal-uncertain-unwrapping is not yet implemented in this Rust port, ignoring");
     }
-    if cli.write_quality_all {
-        eprintln!(
-            "WARNING: --write-quality-all is not yet implemented in this Rust port, ignoring"
-        );
-    }
 
     if cli.verbose {
         eprintln!("ROMEO phase unwrapping");
@@ -208,110 +165,94 @@ fn main() -> Result<()> {
     }
 
     // Parse echo times
-    let echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
+    let mut echo_times =
+        parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
-    // Load phase image
-    let phase_nii = read_nifti(&cli.phase)
+    // Load 4D phase image
+    let mut phase_4d = read_nifti_4d(&cli.phase)
         .with_context(|| format!("Failed to read phase image '{}'", cli.phase))?;
 
-    let (nx, ny, nz) = phase_nii.dims;
-    let n_voxels = nx * ny * nz;
-
-    // Rescale phase to [-π; π] if needed
-    let mut phase_data: Vec<f64> = phase_nii.data.clone();
-    if !cli.no_phase_rescale {
-        rescale_phase(&mut phase_data);
+    // Apply echo selection (filter volumes and echo times with same indices)
+    if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, phase_4d.nt) {
+        if cli.verbose {
+            eprintln!(
+                "  selecting echoes: {:?} (1-based)",
+                sel.iter().map(|i| i + 1).collect::<Vec<_>>()
+            );
+        }
+        phase_4d = select_volumes(&phase_4d, &sel);
+        if !echo_times.is_empty() {
+            echo_times = select_echo_times(&echo_times, &sel);
+        }
     }
 
-    // Load magnitude image if provided
-    let mag_data: Vec<f64> = if let Some(ref mag_path) = cli.magnitude {
-        let mag_nii = read_nifti(mag_path)
+    let (nx, ny, nz) = phase_4d.dims;
+    let n_voxels = nx * ny * nz;
+    let n_echoes = phase_4d.nt;
+
+    if cli.verbose {
+        eprintln!("  dims: {}x{}x{}, {} echoes", nx, ny, nz, n_echoes);
+    }
+
+    // Rescale phase to [-π; π] if needed
+    if !cli.no_phase_rescale {
+        for vol in &mut phase_4d.volumes {
+            rescale_phase(vol);
+        }
+    }
+
+    // Fix GE phase if requested
+    if cli.fix_ge_phase {
+        for vol in &mut phase_4d.volumes {
+            fix_ge_phase_slices(vol, nx, ny, nz);
+        }
+        if cli.verbose {
+            eprintln!("  applied GE phase slice-jump correction");
+        }
+    }
+
+    // Load 4D magnitude image if provided
+    let mag_4d: Option<NiftiData4D> = if let Some(ref mag_path) = cli.magnitude {
+        let mut m4d = read_nifti_4d(mag_path)
             .with_context(|| format!("Failed to read magnitude image '{}'", mag_path))?;
-        mag_nii.data
+        // Apply same echo selection
+        if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, m4d.nt) {
+            m4d = select_volumes(&m4d, &sel);
+        }
+        if m4d.nt != n_echoes {
+            anyhow::bail!(
+                "After echo selection, magnitude has {} echoes but phase has {}",
+                m4d.nt,
+                n_echoes
+            );
+        }
+        Some(m4d)
     } else {
-        vec![]
+        None
     };
 
-    // Build mask (use robust mask: magnitude-based thresholding, or all-ones if no mag)
-    let mask = build_mask(&mag_data, n_voxels, &cli.mask);
+    // Build mask
+    let mask = build_mask(
+        mag_4d.as_ref().map(|m| m.volumes[0].as_slice()),
+        n_voxels,
+        &cli.mask,
+    );
 
     if cli.verbose {
         let n_mask = mask.iter().filter(|&&v| v == 1).count();
         eprintln!("  mask voxels: {}/{}", n_mask, n_voxels);
     }
 
-    // Calculate ROMEO weights
-    let (te1, te2) = if echo_times.len() >= 2 {
-        (echo_times[0], echo_times[1])
-    } else if echo_times.len() == 1 {
-        (echo_times[0], echo_times[0])
+    // Ensure we have echo times matching the number of echoes
+    let tes: Vec<f64> = if echo_times.len() >= n_echoes {
+        echo_times[..n_echoes].to_vec()
+    } else if echo_times.is_empty() {
+        (1..=n_echoes).map(|i| i as f64).collect()
     } else {
-        (1.0, 1.0)
+        echo_times.clone()
     };
 
-    let weights =
-        calculate_weights_romeo(&phase_data, &mag_data, None, te1, te2, &mask, nx, ny, nz);
-
-    // Region growing unwrap
-    let mut unwrapped = phase_data;
-    let mut mask_work = mask.clone();
-
-    // Find seed: voxel with highest weight (brightest/most coherent)
-    let seed = find_seed(&mask_work, &weights, nx, ny, nz);
-
-    let _processed = grow_region_unwrap(
-        &mut unwrapped,
-        &weights,
-        &mut mask_work,
-        nx,
-        ny,
-        nz,
-        seed.0,
-        seed.1,
-        seed.2,
-    );
-
-    if cli.verbose {
-        eprintln!("  processed {} voxels", _processed);
-    }
-
-    // Apply global phase correction if requested
-    if cli.correct_global {
-        let masked_vals: Vec<f64> = unwrapped
-            .iter()
-            .zip(mask.iter())
-            .filter_map(|(&v, &m)| if m > 0 { Some(v) } else { None })
-            .collect();
-        if !masked_vals.is_empty() {
-            let median = compute_median(&masked_vals);
-            let correction =
-                (median / (2.0 * std::f64::consts::PI)).round() * 2.0 * std::f64::consts::PI;
-            for v in unwrapped.iter_mut() {
-                *v -= correction;
-            }
-        }
-    }
-
-    // Apply mask to unwrapped result if requested
-    if cli.mask_unwrapped {
-        for (v, &m) in unwrapped.iter_mut().zip(mask.iter()) {
-            if m == 0 {
-                *v = 0.0;
-            }
-        }
-    }
-
-    // Apply threshold
-    if cli.threshold.is_finite() {
-        let max_val = cli.threshold * 2.0 * std::f64::consts::PI;
-        for v in unwrapped.iter_mut() {
-            if v.abs() > max_val {
-                *v = 0.0;
-            }
-        }
-    }
-
-    // Determine output directory for settings file
+    // Determine output directory
     let output_dir = std::path::Path::new(&cli.output)
         .parent()
         .and_then(|p| p.to_str())
@@ -328,36 +269,446 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     save_settings(output_dir, "romeo", &args)?;
 
-    // Write output NIfTI (reuse header from phase image)
-    let mut out_nii = phase_nii;
-    out_nii.data = unwrapped;
-
     let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
         cli.output.clone()
     } else {
         format!("{}.nii", cli.output)
     };
 
-    write_nifti(&out_path, &out_nii)
-        .with_context(|| format!("Failed to write output '{}'", out_path))?;
+    // ---- Phase offset correction (MCPC-3D-S pipeline for multi-echo) ----
+    let phase_offset: Option<Vec<f64>> = if n_echoes >= 2 && cli.phase_offset_correction.is_some() {
+        let poc = cli.phase_offset_correction.as_deref().unwrap_or("on");
+        if poc != "off" {
+            let mags: Vec<Vec<f64>> = if let Some(ref m) = mag_4d {
+                m.volumes.clone()
+            } else {
+                vec![vec![1.0; n_voxels]; n_echoes]
+            };
+
+            let sigma = parse_smoothing_sigma(&cli.phase_offset_smoothing_sigma_mm);
+
+            let (corrected, offset) = mcpc3ds_single_coil(
+                &phase_4d.volumes,
+                &mags,
+                &tes,
+                &mask,
+                sigma,
+                [0, 1],
+                nx,
+                ny,
+                nz,
+            );
+
+            phase_4d.volumes = corrected;
+
+            if cli.verbose {
+                eprintln!("  applied phase offset correction");
+            }
+            Some(offset)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Write phase offsets if requested
+    if cli.write_phase_offsets {
+        if let Some(ref offset) = phase_offset {
+            let po_path = derive_path(&out_path, "phase_offset");
+            let po_nii = read_nifti(&cli.phase)?;
+            let mut po_out = po_nii;
+            po_out.data = offset.clone();
+            write_nifti(&po_path, &po_out)?;
+            if cli.verbose {
+                eprintln!("  phase offsets saved to: {}", po_path);
+            }
+        }
+    }
+
+    // ---- Compute B0 map if requested (multi-echo) ----
+    if cli.compute_b0.is_some() && n_echoes >= 2 {
+        let b0_name = cli.compute_b0.as_deref().unwrap_or("B0");
+        let weight_type = B0WeightType::from_str(&cli.b0_phase_weighting);
+
+        let mags: Vec<Vec<f64>> = if let Some(ref m) = mag_4d {
+            m.volumes.clone()
+        } else {
+            vec![vec![1.0; n_voxels]; n_echoes]
+        };
+
+        let sigma = parse_smoothing_sigma(&cli.phase_offset_smoothing_sigma_mm);
+
+        let (b0_hz, _po, corrected) = mcpc3ds_b0_pipeline(
+            &phase_4d.volumes,
+            &mags,
+            &tes,
+            &mask,
+            sigma,
+            weight_type,
+            nx,
+            ny,
+            nz,
+        );
+
+        // Use corrected phases from B0 pipeline
+        phase_4d.volumes = corrected;
+
+        // Save B0 map
+        let b0_path = if b0_name.ends_with(".nii") || b0_name.ends_with(".nii.gz") {
+            b0_name.to_string()
+        } else {
+            let b0_dir = std::path::Path::new(&cli.output)
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            b0_dir
+                .join(format!("{}.nii", b0_name))
+                .to_string_lossy()
+                .into()
+        };
+
+        let b0_nii = read_nifti(&cli.phase)?;
+        let mut b0_out = b0_nii;
+        b0_out.data = b0_hz;
+        write_nifti(&b0_path, &b0_out)?;
+        if cli.verbose {
+            eprintln!("  B0 map saved to: {}", b0_path);
+        }
+    }
+
+    // ---- Unwrap each echo ----
+    let mut unwrapped_volumes: Vec<Vec<f64>> = Vec::with_capacity(n_echoes);
+
+    if n_echoes == 1 || cli.individual_unwrapping {
+        // Individual unwrapping: unwrap each echo independently
+        for e in 0..n_echoes {
+            let mag_data = mag_4d
+                .as_ref()
+                .map(|m| m.volumes[e.min(m.nt - 1)].as_slice())
+                .unwrap_or(&[] as &[f64]);
+
+            let unwrapped =
+                unwrap_single_echo(&phase_4d.volumes[e], mag_data, &mask, &cli, nx, ny, nz);
+            unwrapped_volumes.push(unwrapped);
+
+            if cli.verbose {
+                eprintln!("  unwrapped echo {} of {}", e + 1, n_echoes);
+            }
+        }
+    } else {
+        // Temporal unwrapping: unwrap template echo, then propagate
+        let template_idx = (cli.template - 1).min(n_echoes - 1);
+
+        let mag_template = mag_4d
+            .as_ref()
+            .map(|m| m.volumes[template_idx.min(m.nt - 1)].as_slice())
+            .unwrap_or(&[] as &[f64]);
+
+        // Get second echo for weight calculation
+        let second_echo = if template_idx == 0 && n_echoes > 1 {
+            1
+        } else {
+            0
+        };
+
+        let (te1, te2) = (tes[template_idx], tes[second_echo]);
+
+        // Calculate weights with two echoes for better quality
+        let weights = calculate_weights_with_config(
+            &phase_4d.volumes[template_idx],
+            mag_template,
+            Some(&phase_4d.volumes[second_echo]),
+            te1,
+            te2,
+            &mask,
+            nx,
+            ny,
+            nz,
+            &cli.weights,
+        );
+
+        // Unwrap template echo
+        let mut template_unwrapped = phase_4d.volumes[template_idx].clone();
+        let mut mask_work = mask.clone();
+
+        unwrap_with_seeds(
+            &mut template_unwrapped,
+            &weights,
+            &mut mask_work,
+            nx,
+            ny,
+            nz,
+            cli.max_seeds,
+        );
+
+        // Unwrap other echoes using temporal propagation from template
+        unwrapped_volumes = vec![vec![0.0; n_voxels]; n_echoes];
+        unwrapped_volumes[template_idx] = template_unwrapped;
+
+        for e in 0..n_echoes {
+            if e == template_idx {
+                continue;
+            }
+
+            let te_ratio = if tes[template_idx].abs() > 1e-10 {
+                tes[e] / tes[template_idx]
+            } else {
+                1.0
+            };
+
+            // Estimate unwrapped phase from template
+            let mut unwrapped = phase_4d.volumes[e].clone();
+            for i in 0..n_voxels {
+                if mask[i] > 0 {
+                    let expected = unwrapped_volumes[template_idx][i] * te_ratio;
+                    let diff = unwrapped[i] - expected;
+                    let n_wraps = (diff / (2.0 * std::f64::consts::PI)).round();
+                    unwrapped[i] -= n_wraps * 2.0 * std::f64::consts::PI;
+                }
+            }
+
+            unwrapped_volumes[e] = unwrapped;
+        }
+
+        if cli.verbose {
+            eprintln!(
+                "  temporal unwrapping with template echo {} complete",
+                template_idx + 1
+            );
+        }
+    }
+
+    // ---- Post-processing ----
+    for vol in &mut unwrapped_volumes {
+        // Apply global phase correction if requested
+        if cli.correct_global {
+            let masked_vals: Vec<f64> = vol
+                .iter()
+                .zip(mask.iter())
+                .filter_map(|(&v, &m)| if m > 0 { Some(v) } else { None })
+                .collect();
+            if !masked_vals.is_empty() {
+                let median = compute_median(&masked_vals);
+                let correction =
+                    (median / (2.0 * std::f64::consts::PI)).round() * 2.0 * std::f64::consts::PI;
+                for v in vol.iter_mut() {
+                    *v -= correction;
+                }
+            }
+        }
+
+        // Apply mask to unwrapped result if requested
+        if cli.mask_unwrapped {
+            for (v, &m) in vol.iter_mut().zip(mask.iter()) {
+                if m == 0 {
+                    *v = 0.0;
+                }
+            }
+        }
+
+        // Apply threshold
+        if cli.threshold.is_finite() {
+            let max_val = cli.threshold * 2.0 * std::f64::consts::PI;
+            for v in vol.iter_mut() {
+                if v.abs() > max_val {
+                    *v = 0.0;
+                }
+            }
+        }
+    }
+
+    // ---- Write output ----
+    if n_echoes == 1 {
+        // Single echo: write 3D
+        let mut out_nii = read_nifti(&cli.phase)?;
+        out_nii.data = unwrapped_volumes.into_iter().next().unwrap();
+        write_nifti(&out_path, &out_nii)
+            .with_context(|| format!("Failed to write output '{}'", out_path))?;
+    } else {
+        // Multi-echo: write 4D
+        write_nifti_4d(&out_path, &unwrapped_volumes, &phase_4d)
+            .with_context(|| format!("Failed to write 4D output '{}'", out_path))?;
+    }
 
     if cli.verbose {
         eprintln!("  saved to: {}", out_path);
     }
 
     // Write quality map if requested
-    if cli.write_quality {
-        let quality = compute_quality_map(&weights, n_voxels);
-        let mut q_nii = mritools_common::read_nifti(&cli.phase)?;
-        q_nii.data = quality;
-        let q_path = derive_path(&out_path, "quality");
-        write_nifti(&q_path, &q_nii)?;
-        if cli.verbose {
-            eprintln!("  quality map saved to: {}", q_path);
+    if cli.write_quality || cli.write_quality_all {
+        // Use first echo for quality
+        let mag_data = mag_4d
+            .as_ref()
+            .map(|m| m.volumes[0].as_slice())
+            .unwrap_or(&[] as &[f64]);
+
+        let weights = calculate_weights_romeo(
+            &phase_4d.volumes[0],
+            mag_data,
+            None,
+            if tes.len() >= 2 { tes[0] } else { 1.0 },
+            if tes.len() >= 2 { tes[1] } else { 1.0 },
+            &mask,
+            nx,
+            ny,
+            nz,
+        );
+
+        if cli.write_quality {
+            let quality = compute_quality_map(&weights, n_voxels);
+            let mut q_nii = read_nifti(&cli.phase)?;
+            q_nii.data = quality;
+            let q_path = derive_path(&out_path, "quality");
+            write_nifti(&q_path, &q_nii)?;
+            if cli.verbose {
+                eprintln!("  quality map saved to: {}", q_path);
+            }
+        }
+
+        if cli.write_quality_all {
+            let per_dim = weights.len() / 3;
+            for (d, name) in [(0, "quality_x"), (1, "quality_y"), (2, "quality_z")] {
+                let mut q_data = vec![0.0f64; n_voxels];
+                for idx in 0..per_dim.min(n_voxels) {
+                    q_data[idx] = weights[d * per_dim + idx] as f64 / 255.0;
+                }
+                let mut q_nii = read_nifti(&cli.phase)?;
+                q_nii.data = q_data;
+                let q_path = derive_path(&out_path, name);
+                write_nifti(&q_path, &q_nii)?;
+                if cli.verbose {
+                    eprintln!("  {} saved to: {}", name, q_path);
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+/// Unwrap a single 3D echo volume.
+fn unwrap_single_echo(
+    phase: &[f64],
+    mag: &[f64],
+    mask: &[u8],
+    cli: &Cli,
+    nx: usize,
+    ny: usize,
+    nz: usize,
+) -> Vec<f64> {
+    let weights =
+        calculate_weights_with_config(phase, mag, None, 1.0, 1.0, mask, nx, ny, nz, &cli.weights);
+
+    let mut unwrapped = phase.to_vec();
+    let mut mask_work = mask.to_vec();
+
+    unwrap_with_seeds(
+        &mut unwrapped,
+        &weights,
+        &mut mask_work,
+        nx,
+        ny,
+        nz,
+        cli.max_seeds,
+    );
+
+    unwrapped
+}
+
+/// Calculate weights using the specified weight configuration.
+#[allow(clippy::too_many_arguments)]
+fn calculate_weights_with_config(
+    phase: &[f64],
+    mag: &[f64],
+    phase2: Option<&[f64]>,
+    te1: f64,
+    te2: f64,
+    mask: &[u8],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    weights_name: &str,
+) -> Vec<u8> {
+    match weights_name.to_lowercase().as_str() {
+        "romeo" | "romeo6" => {
+            // All 3 weight components: gradient coherence + mag coherence + mag weight
+            calculate_weights_romeo(phase, mag, phase2, te1, te2, mask, nx, ny, nz)
+        }
+        "romeo4" => {
+            // gradient coherence + mag coherence, no mag weight
+            calculate_weights_romeo_configurable(
+                phase, mag, phase2, te1, te2, mask, nx, ny, nz, true, true, false,
+            )
+        }
+        "romeo3" => {
+            // gradient coherence + mag weight, no mag coherence
+            calculate_weights_romeo_configurable(
+                phase, mag, phase2, te1, te2, mask, nx, ny, nz, true, false, true,
+            )
+        }
+        "romeo2" => {
+            // gradient coherence only
+            calculate_weights_romeo_configurable(
+                phase, mag, phase2, te1, te2, mask, nx, ny, nz, true, false, false,
+            )
+        }
+        "bestpath" => {
+            // magnitude weight only (like best path algorithm)
+            calculate_weights_romeo_configurable(
+                phase, mag, phase2, te1, te2, mask, nx, ny, nz, false, false, true,
+            )
+        }
+        other => {
+            // Interpret as binary flags (≥3 chars of '0'/'1').
+            // Positions: [0] phase_gradient_coherence, [1] mag_coherence, [2] mag_weight.
+            // Extra characters (e.g. 6-digit Julia-style flags) are accepted but only
+            // the first three are forwarded to the backend.
+            if other.len() >= 3 && other.chars().all(|c| c == '0' || c == '1') {
+                let flags: Vec<bool> = other.chars().map(|c| c == '1').collect();
+                calculate_weights_romeo_configurable(
+                    phase,
+                    mag,
+                    phase2,
+                    te1,
+                    te2,
+                    mask,
+                    nx,
+                    ny,
+                    nz,
+                    flags[0],
+                    flags.get(1).copied().unwrap_or(false),
+                    flags.get(2).copied().unwrap_or(false),
+                )
+            } else {
+                // Fall back to default
+                calculate_weights_romeo(phase, mag, phase2, te1, te2, mask, nx, ny, nz)
+            }
+        }
+    }
+}
+
+/// Unwrap with potentially multiple seeds.
+fn unwrap_with_seeds(
+    unwrapped: &mut [f64],
+    weights: &[u8],
+    mask: &mut [u8],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    max_seeds: usize,
+) {
+    for _ in 0..max_seeds {
+        let seed = find_seed(mask, weights, nx, ny, nz);
+        if mask[seed.0 + seed.1 * nx + seed.2 * nx * ny] == 0 {
+            break; // No more masked voxels
+        }
+
+        let processed =
+            grow_region_unwrap(unwrapped, weights, mask, nx, ny, nz, seed.0, seed.1, seed.2);
+        if processed == 0 {
+            break;
+        }
+    }
 }
 
 /// Rescale phase data to the range [-π, π].
@@ -374,10 +725,7 @@ fn rescale_phase(phase: &mut [f64]) {
 }
 
 /// Build a binary mask from the mask argument.
-///
-/// Supports "nomask" (all ones), "robustmask" (magnitude-based), and a file
-/// path (reads NIfTI mask).
-fn build_mask(mag: &[f64], n_voxels: usize, mask_args: &[String]) -> Vec<u8> {
+fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec<u8> {
     let mask_type = mask_args
         .first()
         .map(|s| s.as_str())
@@ -385,18 +733,14 @@ fn build_mask(mag: &[f64], n_voxels: usize, mask_args: &[String]) -> Vec<u8> {
     match mask_type {
         "nomask" => vec![1u8; n_voxels],
         "robustmask" => {
-            if mag.is_empty() {
-                vec![1u8; n_voxels]
-            } else {
+            if let Some(mag) = mag {
                 robust_mask(mag)
+            } else {
+                vec![1u8; n_voxels]
             }
         }
-        "qualitymask" => {
-            // threshold is the second argument, default 0.1
-            vec![1u8; n_voxels]
-        }
+        "qualitymask" => vec![1u8; n_voxels],
         _ => {
-            // Try to load as a NIfTI mask file
             if let Ok(mask_nii) = read_nifti(mask_type) {
                 mask_nii
                     .data
@@ -416,7 +760,6 @@ fn robust_mask(mag: &[f64]) -> Vec<u8> {
     if max < 1e-10 {
         return vec![1u8; mag.len()];
     }
-    // Simple threshold at 10% of max (matches default robustmask behaviour)
     let threshold = 0.1 * max;
     mag.iter()
         .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
@@ -431,7 +774,6 @@ fn find_seed(
     ny: usize,
     nz: usize,
 ) -> (usize, usize, usize) {
-    // Use the centre voxel as default seed if it's inside the mask
     let ci = nx / 2;
     let cj = ny / 2;
     let ck = nz / 2;
@@ -439,7 +781,6 @@ fn find_seed(
     if mask.len() > center_idx && mask[center_idx] == 1 {
         return (ci, cj, ck);
     }
-    // Fall back: first masked voxel
     for k in 0..nz {
         for j in 0..ny {
             for i in 0..nx {
@@ -453,7 +794,7 @@ fn find_seed(
     (0, 0, 0)
 }
 
-/// Compute a per-voxel quality map from the edge weights (average of adjacent edges).
+/// Compute a per-voxel quality map from the edge weights.
 fn compute_quality_map(weights: &[u8], n_voxels: usize) -> Vec<f64> {
     let n_w = weights.len();
     let per_dim = n_w / 3;
@@ -496,5 +837,27 @@ fn derive_path(base: &str, suffix: &str) -> String {
         format!("{}_{}.nii", stripped, suffix)
     } else {
         format!("{}_{}.nii", base, suffix)
+    }
+}
+
+/// Parse smoothing sigma from CLI arguments. Default: [7, 7, 7].
+fn parse_smoothing_sigma(args: &[String]) -> [f64; 3] {
+    if args.is_empty() {
+        return [7.0, 7.0, 7.0];
+    }
+    let joined = args.join(" ");
+    let cleaned = joined
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .replace(',', " ");
+    let vals: Vec<f64> = cleaned
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    match vals.len() {
+        0 => [7.0, 7.0, 7.0],
+        1 => [vals[0], vals[0], vals[0]],
+        2 => [vals[0], vals[1], vals[0]],
+        _ => [vals[0], vals[1], vals[2]],
     }
 }

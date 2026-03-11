@@ -695,3 +695,120 @@ fn romeo_mask_with_and_without_magnitude_both_succeed() {
     assert!(size1 > 352);
     assert!(size2 > 352);
 }
+
+// ===== 4D processing tests (Phase.nii is 51x51x41x3) =====
+
+/// 4D with --unwrap-echoes selecting specific echoes.
+#[test]
+fn romeo_mask_unwrap_echoes() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("mask.nii");
+    let status = romeo_mask_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "-e",
+            "[1, 2]",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute romeo_mask");
+    assert!(status.success(), "romeo_mask -e '[1, 2]' failed");
+    assert!(output.exists());
+}
+
+/// 4D with --fix-ge-phase.
+#[test]
+fn romeo_mask_fix_ge_phase() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("mask.nii");
+    let status = romeo_mask_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "--fix-ge-phase",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute romeo_mask");
+    assert!(status.success(), "romeo_mask --fix-ge-phase failed");
+    assert!(output.exists());
+}
+
+/// 4D with --weights romeo2.
+#[test]
+fn romeo_mask_weights_romeo2() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("mask.nii");
+    let status = romeo_mask_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "-w",
+            "romeo2",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute romeo_mask");
+    assert!(status.success(), "romeo_mask -w romeo2 failed");
+    assert!(output.exists());
+}
+
+/// 4D with --weights romeo3.
+#[test]
+fn romeo_mask_weights_romeo3() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("mask.nii");
+    let status = romeo_mask_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "-w",
+            "romeo3",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute romeo_mask");
+    assert!(status.success(), "romeo_mask -w romeo3 failed");
+    assert!(output.exists());
+}
+
+/// 4D combined: --fix-ge-phase + --unwrap-echoes + --weights + quality.
+#[test]
+fn romeo_mask_4d_combined() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("mask.nii");
+    let status = romeo_mask_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--fix-ge-phase",
+            "-w",
+            "romeo4",
+            "-q",
+            "-v",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute romeo_mask");
+    assert!(status.success(), "romeo_mask 4D combined failed");
+    assert!(output.exists());
+    assert!(tmpdir.path().join("mask_quality.nii").exists());
+}
