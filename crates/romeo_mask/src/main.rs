@@ -119,8 +119,8 @@ fn main() -> Result<()> {
     let echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
     // Load 4D phase image
-    let mut phase_4d = read_nifti_4d(phase)
-        .with_context(|| format!("Failed to read phase image '{}'", phase))?;
+    let mut phase_4d =
+        read_nifti_4d(phase).with_context(|| format!("Failed to read phase image '{}'", phase))?;
 
     // Apply echo selection
     if let Some(sel) = parse_echo_selection(&cli.unwrap_echoes, phase_4d.nt) {
@@ -284,6 +284,7 @@ fn main() -> Result<()> {
 }
 
 /// Calculate weights using the specified weight configuration.
+#[allow(clippy::too_many_arguments)]
 fn calculate_weights_with_config(
     phase: &[f64],
     mag: &[f64],
@@ -313,6 +314,8 @@ fn calculate_weights_with_config(
             phase, mag, phase2, te1, te2, mask, nx, ny, nz, false, false, true,
         ),
         other => {
+            // Interpret as binary flags (≥3 chars of '0'/'1').
+            // Positions: [0] phase_gradient_coherence, [1] mag_coherence, [2] mag_weight.
             if other.len() >= 3 && other.chars().all(|c| c == '0' || c == '1') {
                 let flags: Vec<bool> = other.chars().map(|c| c == '1').collect();
                 calculate_weights_romeo_configurable(

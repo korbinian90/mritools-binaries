@@ -195,17 +195,11 @@ fn romeo_4d_phase_offset_correction() {
         ])
         .status()
         .expect("failed to execute romeo");
-    assert!(
-        status.success(),
-        "romeo --phase-offset-correction failed"
-    );
+    assert!(status.success(), "romeo --phase-offset-correction failed");
     assert!(output.exists());
     // Phase offsets should be written
     let po_path = tmpdir.path().join("unwrapped_phase_offset.nii");
-    assert!(
-        po_path.exists(),
-        "phase offset file was not created"
-    );
+    assert!(po_path.exists(), "phase offset file was not created");
 }
 
 /// 4D with B0 computation and phase-offset correction combined.
@@ -229,7 +223,10 @@ fn romeo_4d_compute_b0_with_weights() {
         ])
         .status()
         .expect("failed to execute romeo");
-    assert!(status.success(), "romeo -B --B0-phase-weighting average failed");
+    assert!(
+        status.success(),
+        "romeo -B --B0-phase-weighting average failed"
+    );
     assert!(output.exists());
     let b0_path = tmpdir.path().join("B0.nii");
     assert!(b0_path.exists(), "B0 map was not created");

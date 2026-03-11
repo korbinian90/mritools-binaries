@@ -149,11 +149,7 @@ pub fn parse_echo_times(args: &[String]) -> anyhow::Result<Vec<f64>> {
 }
 
 /// Write a 4D NIfTI file from a list of 3D volumes, using header info from a [`NiftiData4D`].
-pub fn write_nifti_4d(
-    path: &str,
-    volumes: &[Vec<f64>],
-    nii4d: &NiftiData4D,
-) -> anyhow::Result<()> {
+pub fn write_nifti_4d(path: &str, volumes: &[Vec<f64>], nii4d: &NiftiData4D) -> anyhow::Result<()> {
     // Concatenate all volumes into a flat array
     let n_voxels = nii4d.dims.0 * nii4d.dims.1 * nii4d.dims.2;
     let nt = volumes.len();
@@ -163,8 +159,7 @@ pub fn write_nifti_4d(
     }
     let bytes = save_nifti_4d_raw(&flat, nii4d.dims, nt, nii4d.voxel_size, &nii4d.affine)
         .map_err(|e| anyhow::anyhow!("Failed to encode 4D NIfTI '{}': {}", path, e))?;
-    std::fs::write(path, bytes)
-        .map_err(|e| anyhow::anyhow!("Cannot write '{}': {}", path, e))?;
+    std::fs::write(path, bytes).map_err(|e| anyhow::anyhow!("Cannot write '{}': {}", path, e))?;
     Ok(())
 }
 
@@ -190,16 +185,7 @@ fn save_nifti_4d_raw(
     header[0..4].copy_from_slice(&348i32.to_le_bytes());
 
     // dim[0..7]  – dim[0]=4 signals a 4D dataset
-    let dim: [i16; 8] = [
-        4,
-        nx as i16,
-        ny as i16,
-        nz as i16,
-        nt as i16,
-        1,
-        1,
-        1,
-    ];
+    let dim: [i16; 8] = [4, nx as i16, ny as i16, nz as i16, nt as i16, 1, 1, 1];
     for (i, &d) in dim.iter().enumerate() {
         let offset = 40 + i * 2;
         header[offset..offset + 2].copy_from_slice(&d.to_le_bytes());
@@ -210,16 +196,7 @@ fn save_nifti_4d_raw(
     header[72..74].copy_from_slice(&32i16.to_le_bytes());
 
     // pixdim
-    let pixdim: [f32; 8] = [
-        0.0,
-        vsx as f32,
-        vsy as f32,
-        vsz as f32,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-    ];
+    let pixdim: [f32; 8] = [0.0, vsx as f32, vsy as f32, vsz as f32, 1.0, 1.0, 1.0, 1.0];
     for (i, &p) in pixdim.iter().enumerate() {
         let offset = 76 + i * 4;
         header[offset..offset + 4].copy_from_slice(&p.to_le_bytes());
@@ -284,7 +261,10 @@ pub fn parse_echo_selection(args: &[String], n_echoes: usize) -> Option<Vec<usiz
     if joined.contains(':') {
         let parts: Vec<&str> = joined.split(':').collect();
         if parts.len() == 2 {
-            if let (Ok(start), Ok(stop)) = (parts[0].trim().parse::<usize>(), parts[1].trim().parse::<usize>()) {
+            if let (Ok(start), Ok(stop)) = (
+                parts[0].trim().parse::<usize>(),
+                parts[1].trim().parse::<usize>(),
+            ) {
                 let indices: Vec<usize> = (start..=stop)
                     .filter(|&i| i >= 1 && i <= n_echoes)
                     .map(|i| i - 1)
@@ -334,14 +314,13 @@ pub fn parse_echo_selection(args: &[String], n_echoes: usize) -> Option<Vec<usiz
 
 /// Fix GE phase slice-jump artefacts.
 ///
-/// For each z-slice, check if the mean phase differs by roughly ±2π from
-/// the neighbouring slices and correct if so.  Operates in-place.
-pub fn fix_ge_phase_slices(
-    phase: &mut [f64],
-    nx: usize,
-    ny: usize,
-    nz: usize,
-) {
+/// Walks through z-slices from k=1 onward, comparing each slice's mean phase
+/// to the *previous* slice (k−1).  When the difference exceeds π, the current
+/// slice is corrected by the closest integer multiple of 2π.  Corrections are
+/// cumulative: the updated mean is used for subsequent comparisons.
+///
+/// Operates in-place on the `phase` array.
+pub fn fix_ge_phase_slices(phase: &mut [f64], nx: usize, ny: usize, nz: usize) {
     let pi = std::f64::consts::PI;
     let two_pi = 2.0 * pi;
     let n_xy = nx * ny;
@@ -477,13 +456,17 @@ mod tests {
         let nz = 3;
         // Slice 0: mean ~0, Slice 1: mean ~2π (jump), Slice 2: mean ~0
         let mut phase = vec![
-            0.0, 0.0, 0.0, 0.0,           // slice 0
-            6.28, 6.28, 6.28, 6.28,        // slice 1 (2π jump)
-            0.1, 0.1, 0.1, 0.1,            // slice 2
+            0.0, 0.0, 0.0, 0.0, // slice 0
+            6.28, 6.28, 6.28, 6.28, // slice 1 (2π jump)
+            0.1, 0.1, 0.1, 0.1, // slice 2
         ];
         fix_ge_phase_slices(&mut phase, nx, ny, nz);
         // After correction, slice 1 should be close to 0
         let mean_slice1: f64 = phase[4..8].iter().sum::<f64>() / 4.0;
-        assert!(mean_slice1.abs() < pi, "slice 1 mean should be close to 0, got {}", mean_slice1);
+        assert!(
+            mean_slice1.abs() < pi,
+            "slice 1 mean should be close to 0, got {}",
+            mean_slice1
+        );
     }
 }

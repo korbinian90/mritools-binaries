@@ -265,45 +265,41 @@ fn main() -> Result<()> {
     };
 
     // ---- Phase offset correction (MCPC-3D-S pipeline for multi-echo) ----
-    let phase_offset: Option<Vec<f64>> =
-        if n_echoes >= 2 && cli.phase_offset_correction.is_some() {
-            let poc = cli
-                .phase_offset_correction
-                .as_deref()
-                .unwrap_or("on");
-            if poc != "off" {
-                let mags: Vec<Vec<f64>> = if let Some(ref m) = mag_4d {
-                    m.volumes.clone()
-                } else {
-                    vec![vec![1.0; n_voxels]; n_echoes]
-                };
-
-                let sigma = parse_smoothing_sigma(&cli.phase_offset_smoothing_sigma_mm);
-
-                let (corrected, offset) = mcpc3ds_single_coil(
-                    &phase_4d.volumes,
-                    &mags,
-                    &tes,
-                    &mask,
-                    sigma,
-                    [0, 1],
-                    nx,
-                    ny,
-                    nz,
-                );
-
-                phase_4d.volumes = corrected;
-
-                if cli.verbose {
-                    eprintln!("  applied phase offset correction");
-                }
-                Some(offset)
+    let phase_offset: Option<Vec<f64>> = if n_echoes >= 2 && cli.phase_offset_correction.is_some() {
+        let poc = cli.phase_offset_correction.as_deref().unwrap_or("on");
+        if poc != "off" {
+            let mags: Vec<Vec<f64>> = if let Some(ref m) = mag_4d {
+                m.volumes.clone()
             } else {
-                None
+                vec![vec![1.0; n_voxels]; n_echoes]
+            };
+
+            let sigma = parse_smoothing_sigma(&cli.phase_offset_smoothing_sigma_mm);
+
+            let (corrected, offset) = mcpc3ds_single_coil(
+                &phase_4d.volumes,
+                &mags,
+                &tes,
+                &mask,
+                sigma,
+                [0, 1],
+                nx,
+                ny,
+                nz,
+            );
+
+            phase_4d.volumes = corrected;
+
+            if cli.verbose {
+                eprintln!("  applied phase offset correction");
             }
+            Some(offset)
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
 
     // Write phase offsets if requested
     if cli.write_phase_offsets {
@@ -332,8 +328,17 @@ fn main() -> Result<()> {
 
         let sigma = parse_smoothing_sigma(&cli.phase_offset_smoothing_sigma_mm);
 
-        let (b0_hz, _po, corrected) =
-            mcpc3ds_b0_pipeline(&phase_4d.volumes, &mags, &tes, &mask, sigma, weight_type, nx, ny, nz);
+        let (b0_hz, _po, corrected) = mcpc3ds_b0_pipeline(
+            &phase_4d.volumes,
+            &mags,
+            &tes,
+            &mask,
+            sigma,
+            weight_type,
+            nx,
+            ny,
+            nz,
+        );
 
         // Use corrected phases from B0 pipeline
         phase_4d.volumes = corrected;
@@ -434,7 +439,11 @@ fn main() -> Result<()> {
                 continue;
             }
 
-            let te_ratio = tes[e] / tes[template_idx];
+            let te_ratio = if tes[template_idx].abs() > 1e-10 {
+                tes[e] / tes[template_idx]
+            } else {
+                1.0
+            };
 
             // Estimate unwrapped phase from template
             let mut unwrapped = phase_4d.volumes[e].clone();
@@ -576,28 +585,27 @@ fn unwrap_single_echo(
     ny: usize,
     nz: usize,
 ) -> Vec<f64> {
-    let weights = calculate_weights_with_config(
-        phase,
-        mag,
-        None,
-        1.0,
-        1.0,
-        mask,
-        nx,
-        ny,
-        nz,
-        &cli.weights,
-    );
+    let weights =
+        calculate_weights_with_config(phase, mag, None, 1.0, 1.0, mask, nx, ny, nz, &cli.weights);
 
     let mut unwrapped = phase.to_vec();
     let mut mask_work = mask.to_vec();
 
-    unwrap_with_seeds(&mut unwrapped, &weights, &mut mask_work, nx, ny, nz, cli.max_seeds);
+    unwrap_with_seeds(
+        &mut unwrapped,
+        &weights,
+        &mut mask_work,
+        nx,
+        ny,
+        nz,
+        cli.max_seeds,
+    );
 
     unwrapped
 }
 
 /// Calculate weights using the specified weight configuration.
+#[allow(clippy::too_many_arguments)]
 fn calculate_weights_with_config(
     phase: &[f64],
     mag: &[f64],
@@ -640,8 +648,10 @@ fn calculate_weights_with_config(
             )
         }
         other => {
-            // Try to interpret as 6-digit binary flags: phase_grad, mag_coh, mag_weight,
-            // phase2_grad, mag2_coh, mag2_weight  (only first 3 are used)
+            // Interpret as binary flags (≥3 chars of '0'/'1').
+            // Positions: [0] phase_gradient_coherence, [1] mag_coherence, [2] mag_weight.
+            // Extra characters (e.g. 6-digit Julia-style flags) are accepted but only
+            // the first three are forwarded to the backend.
             if other.len() >= 3 && other.chars().all(|c| c == '0' || c == '1') {
                 let flags: Vec<bool> = other.chars().map(|c| c == '1').collect();
                 calculate_weights_romeo_configurable(
@@ -801,7 +811,7 @@ fn compute_median(values: &[f64]) -> f64 {
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = sorted.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     } else {
         sorted[n / 2]

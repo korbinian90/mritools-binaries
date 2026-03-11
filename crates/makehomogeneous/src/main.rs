@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{read_nifti, read_nifti_4d, write_nifti, write_nifti_4d, save_settings};
+use mritools_common::{read_nifti, read_nifti_4d, save_settings, write_nifti, write_nifti_4d};
 
 /// Homogeneity correction for high-field MRI.
 ///
@@ -105,8 +105,12 @@ fn main() -> Result<()> {
         // Single echo: process as 3D
         let corrected = qsm_core::utils::makehomogeneous(
             &mag_4d.volumes[0],
-            nx, ny, nz,
-            vx, vy, vz,
+            nx,
+            ny,
+            nz,
+            vx,
+            vy,
+            vz,
             cli.sigma_bias_field,
             cli.nbox.max(1) as usize,
         );
@@ -130,8 +134,12 @@ fn main() -> Result<()> {
         for e in 0..n_echoes {
             let corrected = qsm_core::utils::makehomogeneous(
                 &mag_4d.volumes[e],
-                nx, ny, nz,
-                vx, vy, vz,
+                nx,
+                ny,
+                nz,
+                vx,
+                vy,
+                vz,
                 cli.sigma_bias_field,
                 cli.nbox.max(1) as usize,
             );
@@ -177,10 +185,7 @@ fn apply_datatype_conversion(data: &[f64], datatype: Option<&str>) -> Vec<f64> {
                 .iter()
                 .map(|&v| v.round().clamp(i32::MIN as f64, i32::MAX as f64))
                 .collect(),
-            "uint8" | "u8" => data
-                .iter()
-                .map(|&v| v.round().clamp(0.0, 255.0))
-                .collect(),
+            "uint8" | "u8" => data.iter().map(|&v| v.round().clamp(0.0, 255.0)).collect(),
             "uint16" | "u16" => data
                 .iter()
                 .map(|&v| v.round().clamp(0.0, u16::MAX as f64))

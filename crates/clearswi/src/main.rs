@@ -195,8 +195,7 @@ fn main() -> Result<()> {
     let mag_corrected: Vec<f64> = match cli.mag_sensitivity_correction.as_str() {
         "off" => mag_combined.clone(),
         "on" => {
-            let sensitivity =
-                get_sensitivity(&mag_combined, nx, ny, nz, vsx, vsy, vsz, 7.0, 15);
+            let sensitivity = get_sensitivity(&mag_combined, nx, ny, nz, vsx, vsy, vsz, 7.0, 15);
             let mut corrected = vec![0.0; n_voxels];
             for i in 0..n_voxels {
                 if sensitivity[i] > 1e-10 {
@@ -450,19 +449,13 @@ fn combine_magnitude(mag_4d: &NiftiData4D, method: &[String], echo_times: &[f64]
         }
         "echo" => {
             // Select specific echo number
-            let echo_num: usize = method
-                .get(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
+            let echo_num: usize = method.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
             let idx = (echo_num - 1).min(mag_4d.nt - 1);
             mag_4d.volumes[idx].clone()
         }
         "se" => {
             // Select echo closest to specified TE
-            let target_te: f64 = method
-                .get(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
+            let target_te: f64 = method.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if echo_times.is_empty() {
                 mag_4d.volumes[0].clone()
             } else {
@@ -591,7 +584,7 @@ fn compute_median(values: &[f64]) -> f64 {
     }
     sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     } else {
         sorted[n / 2]

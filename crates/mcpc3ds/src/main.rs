@@ -10,8 +10,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_times, read_nifti_4d, write_nifti_4d, write_nifti_from_4d,
-    save_settings,
+    fix_ge_phase_slices, parse_echo_times, read_nifti_4d, save_settings, write_nifti_4d,
+    write_nifti_from_4d,
 };
 use qsm_core::utils::mcpc3ds_single_coil;
 
@@ -199,11 +199,7 @@ fn main() -> Result<()> {
 
     // Save input phases if writesteps requested
     if let Some(ref dir) = cli.writesteps {
-        write_nifti_4d(
-            &format!("{}/input_phases.nii", dir),
-            &phases,
-            &phase_4d,
-        )?;
+        write_nifti_4d(&format!("{}/input_phases.nii", dir), &phases, &phase_4d)?;
     }
 
     // Run MCPC-3D-S
@@ -233,7 +229,10 @@ fn main() -> Result<()> {
             )?;
         }
     } else if cli.bipolar && n_echoes < 3 {
-        eprintln!("WARNING: --bipolar requires >= 3 echoes, got {}, skipping", n_echoes);
+        eprintln!(
+            "WARNING: --bipolar requires >= 3 echoes, got {}, skipping",
+            n_echoes
+        );
     }
 
     if cli.verbose {
@@ -278,9 +277,11 @@ fn bipolar_correction(phases: &mut [Vec<f64>], mask: &[u8], n_voxels: usize) {
         return;
     }
 
-    // Estimate eddy current phase: difference between odd and even echo phases
-    // eddy = (phase[2] - phase[0]) / 2 - (phase[1] - phase[0])  (simplified)
-    // For each pair of adjacent echoes, compute the non-linear phase change
+    // Estimate eddy current phase from odd-index echoes.
+    // For each odd echo e (0-based: 1, 3, …) that has neighbours e-1 and e+1,
+    // compute the deviation from the linear interpolation of its even neighbours:
+    //   eddy[i] += phase[e][i] - (phase[e-1][i] + phase[e+1][i]) / 2
+    // The average deviation is then subtracted from all odd echoes.
     let mut eddy_phase = vec![0.0f64; n_voxels];
     let mut count = 0;
 
@@ -299,9 +300,8 @@ fn bipolar_correction(phases: &mut [Vec<f64>], mask: &[u8], n_voxels: usize) {
     }
 
     if count > 0 {
-        let inv_count = 1.0 / count as f64;
-        for i in 0..n_voxels {
-            eddy_phase[i] *= inv_count;
+        for v in eddy_phase.iter_mut().take(n_voxels) {
+            *v /= count as f64;
         }
 
         // Subtract eddy current phase from odd echoes (1-based: 2, 4, 6, ...)
