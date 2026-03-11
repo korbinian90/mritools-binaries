@@ -50,6 +50,11 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Warn about flags that are accepted for CLI compatibility but not yet implemented
+    if cli.datatype.is_some() {
+        eprintln!("WARNING: --datatype is not yet implemented in this Rust port, using input type");
+    }
+
     let magnitude = cli
         .magnitude
         .as_deref()

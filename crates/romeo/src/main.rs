@@ -85,10 +85,6 @@ struct Cli {
     #[arg(long, default_value_t = 1)]
     template: usize,
 
-    /// Deactivate memory mapping
-    #[arg(short = 'N', long = "no-mmap")]
-    no_mmap: bool,
-
     /// Deactivate rescaling of input phase to [-π;π]
     #[arg(long = "no-phase-rescale", alias = "no-rescale")]
     no_phase_rescale: bool,
@@ -140,6 +136,67 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Warn about flags that are accepted for CLI compatibility but not yet implemented
+    if cli.unwrap_echoes.len() != 1 || cli.unwrap_echoes[0] != ":" {
+        eprintln!(
+            "WARNING: --unwrap-echoes is not yet implemented in this Rust port, loading all echoes"
+        );
+    }
+    if cli.compute_b0.is_some() {
+        eprintln!("WARNING: --compute-B0 is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.b0_phase_weighting != "phase_snr" {
+        eprintln!(
+            "WARNING: --B0-phase-weighting is not yet implemented in this Rust port, ignoring"
+        );
+    }
+    if cli.phase_offset_correction.is_some() {
+        eprintln!(
+            "WARNING: --phase-offset-correction is not yet implemented in this Rust port, ignoring"
+        );
+    }
+    if !cli.phase_offset_smoothing_sigma_mm.is_empty() {
+        eprintln!("WARNING: --phase-offset-smoothing-sigma-mm is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.write_phase_offsets {
+        eprintln!(
+            "WARNING: --write-phase-offsets is not yet implemented in this Rust port, ignoring"
+        );
+    }
+    if cli.individual_unwrapping {
+        eprintln!(
+            "WARNING: --individual-unwrapping is not yet implemented in this Rust port, ignoring"
+        );
+    }
+    if cli.template != 1 {
+        eprintln!("WARNING: --template is not yet implemented in this Rust port, using default");
+    }
+    if cli.fix_ge_phase {
+        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.max_seeds > 1 {
+        eprintln!(
+            "WARNING: --max-seeds > 1 is not yet implemented in this Rust port, using 1 seed"
+        );
+    }
+    if cli.merge_regions {
+        eprintln!("WARNING: --merge-regions is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.correct_regions {
+        eprintln!("WARNING: --correct-regions is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.wrap_addition != 0.0 {
+        eprintln!("WARNING: --wrap-addition is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.temporal_uncertain_unwrapping != 0.0 {
+        eprintln!("WARNING: --temporal-uncertain-unwrapping is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.write_quality_all {
+        eprintln!(
+            "WARNING: --write-quality-all is not yet implemented in this Rust port, ignoring"
+        );
+    }
 
     if cli.verbose {
         eprintln!("ROMEO phase unwrapping");

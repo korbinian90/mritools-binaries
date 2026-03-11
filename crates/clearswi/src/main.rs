@@ -87,10 +87,6 @@ struct Cli {
     #[arg(short = 'e', long, num_args = 1.., default_values = &[":"])]
     echoes: Vec<String>,
 
-    /// Deactivate memory mapping
-    #[arg(short = 'N', long = "no-mmap")]
-    no_mmap: bool,
-
     /// Deactivate automatic rescaling of phase images to [-π;π]
     #[arg(long)]
     no_phase_rescale: bool,
@@ -110,6 +106,38 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Warn about flags that are accepted for CLI compatibility but not yet implemented
+    if cli.qsm {
+        eprintln!("WARNING: --qsm is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.qsm_input.is_some() {
+        eprintln!("WARNING: --qsm-input is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.qsm_mask.is_some() {
+        eprintln!("WARNING: --qsm-mask is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.mag_combine.len() != 1 || cli.mag_combine[0] != "SNR" {
+        eprintln!("WARNING: --mag-combine is not yet implemented in this Rust port, using default");
+    }
+    if cli.mag_sensitivity_correction != "on" {
+        eprintln!("WARNING: --mag-sensitivity-correction is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.unwrapping_algorithm != "laplacian" {
+        eprintln!(
+            "WARNING: --unwrapping-algorithm '{}' is not yet implemented, using laplacian",
+            cli.unwrapping_algorithm
+        );
+    }
+    if cli.echoes.len() != 1 || cli.echoes[0] != ":" {
+        eprintln!("WARNING: --echoes is not yet implemented in this Rust port, loading all echoes");
+    }
+    if cli.fix_ge_phase {
+        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.writesteps.is_some() {
+        eprintln!("WARNING: --writesteps is not yet implemented in this Rust port, ignoring");
+    }
 
     let magnitude = cli
         .magnitude

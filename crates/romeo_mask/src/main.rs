@@ -76,6 +76,22 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Warn about flags that are accepted for CLI compatibility but not yet implemented
+    if cli.unwrap_echoes.len() != 1 || cli.unwrap_echoes[0] != ":" {
+        eprintln!(
+            "WARNING: --unwrap-echoes is not yet implemented in this Rust port, loading all echoes"
+        );
+    }
+    if cli.weights != "romeo" {
+        eprintln!(
+            "WARNING: --weights '{}' variant is not yet implemented, using default romeo weights",
+            cli.weights
+        );
+    }
+    if cli.fix_ge_phase {
+        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
+    }
+
     let phase = cli
         .phase
         .as_deref()

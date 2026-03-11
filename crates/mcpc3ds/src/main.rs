@@ -51,10 +51,6 @@ struct Cli {
     #[arg(long)]
     write_phase_offsets: bool,
 
-    /// Deactivate memory mapping
-    #[arg(short = 'N', long = "no-mmap")]
-    no_mmap: bool,
-
     /// Deactivate automatic rescaling of phase images to [-π;π]
     #[arg(long)]
     no_phase_rescale: bool,
@@ -74,6 +70,17 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Warn about flags that are accepted for CLI compatibility but not yet implemented
+    if cli.bipolar {
+        eprintln!("WARNING: --bipolar is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.fix_ge_phase {
+        eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
+    }
+    if cli.writesteps.is_some() {
+        eprintln!("WARNING: --writesteps is not yet implemented in this Rust port, ignoring");
+    }
 
     let phase = cli
         .phase

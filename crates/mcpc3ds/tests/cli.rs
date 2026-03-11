@@ -53,34 +53,6 @@ fn mcpc3ds_phase_mag_echo_range() {
     );
 }
 
-/// Test: `mcpc3ds -p Phase.nii -m Mag.nii -t 1:3 -N -o <tmpfile>`
-///
-/// From mcpc3ds_test.jl: `args = ["-p", phasefile, "-m", magfile, "-t", "1:3", "-N"]`
-#[test]
-fn mcpc3ds_phase_mag_echo_range_no_mmap() {
-    let tmpdir = tempfile::tempdir().unwrap();
-    let output = tmpdir.path().join("output");
-    let status = mcpc3ds_bin()
-        .args([
-            "-p",
-            &phase_file(),
-            "-m",
-            &mag_file(),
-            "-t",
-            "1:3",
-            "-N",
-            "-o",
-            output.to_str().unwrap(),
-        ])
-        .status()
-        .expect("failed to execute mcpc3ds");
-    assert!(status.success(), "mcpc3ds exited with: {}", status);
-    assert!(
-        tmpdir.path().join("settings_mcpc3ds.txt").exists(),
-        "settings_mcpc3ds.txt was not created"
-    );
-}
-
 /// Test: `mcpc3ds -p Phase.nii -m Mag.nii -t 1:3 --write-phase-offsets -o <tmpfile>`
 ///
 /// From mcpc3ds_test.jl: `args = ["-p", phasefile, "-m", magfile, "-t", "1:3", "--write-phase-offsets"]`
@@ -438,7 +410,6 @@ fn mcpc3ds_combined_options() {
             "-t",
             "[1.5,3.0,4.5]",
             "--write-phase-offsets",
-            "-N",
             "-v",
             "-o",
             output.to_str().unwrap(),

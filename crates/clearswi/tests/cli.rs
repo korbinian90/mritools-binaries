@@ -486,31 +486,6 @@ fn clearswi_echo_times_range_3part() {
     assert!(output.exists());
 }
 
-// ===== No-mmap flag =====
-
-/// Test with -N (no-mmap) flag.
-#[test]
-fn clearswi_no_mmap() {
-    let tmpdir = tempfile::tempdir().unwrap();
-    let output = tmpdir.path().join("clearswi.nii");
-    let status = clearswi_bin()
-        .args([
-            "-p",
-            &phase_file(),
-            "-m",
-            &mag_file(),
-            "-t",
-            "1:3",
-            "-N",
-            "-o",
-            output.to_str().unwrap(),
-        ])
-        .status()
-        .expect("failed to execute clearswi");
-    assert!(status.success());
-    assert!(output.exists());
-}
-
 // ===== Missing required args =====
 
 /// Without -m (magnitude), the binary should fail.
