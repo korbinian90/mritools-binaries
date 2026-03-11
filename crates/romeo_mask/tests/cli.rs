@@ -489,7 +489,7 @@ fn romeo_mask_verbose_output_content() {
 
 // ===== Factor parameter =====
 
-/// Test with a different factor value (0.5 = more restrictive mask).
+/// Test with a different factor value (0.5 = less restrictive mask, lower threshold).
 #[test]
 fn romeo_mask_factor_high() {
     let tmpdir = tempfile::tempdir().unwrap();
@@ -511,7 +511,7 @@ fn romeo_mask_factor_high() {
     assert!(output.exists());
 }
 
-/// Test with a very low factor (0.01 = very permissive mask).
+/// Test with a very low factor (0.01 = more restrictive mask, higher threshold).
 #[test]
 fn romeo_mask_factor_low() {
     let tmpdir = tempfile::tempdir().unwrap();

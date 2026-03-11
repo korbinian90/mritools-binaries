@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{parse_echo_times, read_nifti, write_nifti};
+use mritools_common::{parse_echo_times, read_nifti_4d, write_nifti, NiftiData};
 use qsm_core::swi::{calculate_swi, create_mip, softplus_scaling, PhaseScaling};
 use qsm_core::unwrap::laplacian::laplacian_unwrap;
 
@@ -173,27 +173,52 @@ fn main() -> Result<()> {
     // Parse echo times
     let _echo_times = parse_echo_times(&cli.echo_times).context("Failed to parse --echo-times")?;
 
-    // Load magnitude image
-    let mag_nii = read_nifti(magnitude)
+    // Load magnitude image (4D)
+    let mag_4d = read_nifti_4d(magnitude)
         .with_context(|| format!("Failed to read magnitude image '{}'", magnitude))?;
 
-    let (nx, ny, nz) = mag_nii.dims;
-    let (vsx, vsy, vsz) = mag_nii.voxel_size;
+    let (nx, ny, nz) = mag_4d.dims;
+    let (vsx, vsy, vsz) = mag_4d.voxel_size;
     let n_voxels = nx * ny * nz;
 
     if cli.verbose {
-        eprintln!("  dims: {}x{}x{}", nx, ny, nz);
+        eprintln!("  dims: {}x{}x{}, {} echoes", nx, ny, nz, mag_4d.nt);
         eprintln!("  voxel size: {:.3}x{:.3}x{:.3} mm", vsx, vsy, vsz);
     }
 
-    // Build mask from magnitude
-    let mask = robust_mask(&mag_nii.data);
+    // Combine magnitude echoes (SNR-like: root sum of squares)
+    let mag_combined: Vec<f64> = if mag_4d.nt > 1 {
+        let mut combined = vec![0.0f64; n_voxels];
+        for vol in &mag_4d.volumes {
+            for (c, &v) in combined.iter_mut().zip(vol.iter()) {
+                *c += v * v;
+            }
+        }
+        combined.iter_mut().for_each(|c| *c = c.sqrt());
+        combined
+    } else {
+        mag_4d.volumes[0].clone()
+    };
+
+    // Build mask from combined magnitude
+    let mask = robust_mask(&mag_combined);
 
     // Get phase data (load and unwrap, or default to zeros if no phase provided)
     let unwrapped_phase: Vec<f64> = if let Some(ref phase_path) = cli.phase {
-        let phase_nii = read_nifti(phase_path)
+        let phase_4d = read_nifti_4d(phase_path)
             .with_context(|| format!("Failed to read phase image '{}'", phase_path))?;
-        let mut phase_data = phase_nii.data;
+
+        // Validate dimensions match magnitude
+        if phase_4d.dims != mag_4d.dims {
+            anyhow::bail!(
+                "Phase image dimensions {:?} do not match magnitude dimensions {:?}",
+                phase_4d.dims,
+                mag_4d.dims
+            );
+        }
+
+        // Use first echo phase for unwrapping
+        let mut phase_data = phase_4d.volumes[0].clone();
 
         // Rescale phase to [-π; π] if needed
         if !cli.no_phase_rescale {
@@ -232,7 +257,7 @@ fn main() -> Result<()> {
     // Calculate SWI
     let mut swi = calculate_swi(
         &unwrapped_phase,
-        &mag_nii.data,
+        &mag_combined,
         &mask,
         nx,
         ny,
@@ -248,8 +273,7 @@ fn main() -> Result<()> {
     // Apply softplus scaling if enabled
     if cli.mag_softplus_scaling != "off" {
         // Estimate offset from magnitude (median of masked values)
-        let masked_vals: Vec<f64> = mag_nii
-            .data
+        let masked_vals: Vec<f64> = mag_combined
             .iter()
             .zip(mask.iter())
             .filter_map(|(&v, &m)| if m > 0 { Some(v) } else { None })
@@ -273,8 +297,14 @@ fn main() -> Result<()> {
         format!("{}.nii", cli.output)
     };
 
-    let mut out_nii = mag_nii;
-    out_nii.data = swi.clone();
+    let out_nii = NiftiData {
+        data: swi.clone(),
+        dims: (nx, ny, nz),
+        voxel_size: mag_4d.voxel_size,
+        affine: mag_4d.affine,
+        scl_slope: 1.0,
+        scl_inter: 0.0,
+    };
     write_nifti(&out_path, &out_nii)
         .with_context(|| format!("Failed to write output '{}'", out_path))?;
 
@@ -292,10 +322,10 @@ fn main() -> Result<()> {
             let mip_nii = mritools_common::NiftiData {
                 data: mip,
                 dims: (nx, ny, nz_mip),
-                voxel_size: out_nii.voxel_size,
-                affine: out_nii.affine,
-                scl_slope: out_nii.scl_slope,
-                scl_inter: out_nii.scl_inter,
+                voxel_size: mag_4d.voxel_size,
+                affine: mag_4d.affine,
+                scl_slope: 1.0,
+                scl_inter: 0.0,
             };
             write_nifti(&mip_path, &mip_nii)
                 .with_context(|| format!("Failed to write MIP '{}'", mip_path))?;
@@ -355,10 +385,13 @@ fn parse_filter_size(args: &[String]) -> [f64; 3] {
     }
 }
 
-/// Compute the median of a slice.
+/// Compute the median of a slice, filtering out NaN values.
 fn compute_median(values: &[f64]) -> f64 {
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut sorted: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0

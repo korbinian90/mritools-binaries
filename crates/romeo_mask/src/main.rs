@@ -92,6 +92,11 @@ fn main() -> Result<()> {
         eprintln!("WARNING: --fix-ge-phase is not yet implemented in this Rust port, ignoring");
     }
 
+    // Validate factor range
+    if cli.factor < 0.0 || cli.factor > 1.0 {
+        anyhow::bail!("--factor must be in [0, 1], got {}", cli.factor);
+    }
+
     let phase = cli
         .phase
         .as_deref()
@@ -143,6 +148,16 @@ fn main() -> Result<()> {
     let mag_data: Vec<f64> = if let Some(ref mag_path) = cli.magnitude {
         let mag_nii = read_nifti(mag_path)
             .with_context(|| format!("Failed to read magnitude image '{}'", mag_path))?;
+
+        // Validate dimensions match phase
+        if mag_nii.dims != phase_nii.dims {
+            anyhow::bail!(
+                "Magnitude image dimensions {:?} do not match phase dimensions {:?}",
+                mag_nii.dims,
+                phase_nii.dims
+            );
+        }
+
         mag_nii.data
     } else {
         vec![]

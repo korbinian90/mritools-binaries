@@ -149,6 +149,23 @@ fn main() -> Result<()> {
     let mags: Vec<Vec<f64>> = if let Some(ref mag_path) = cli.magnitude {
         let mag_4d = read_nifti_4d(mag_path)
             .with_context(|| format!("Failed to read magnitude image '{}'", mag_path))?;
+
+        // Validate dimensions match phase
+        if mag_4d.dims != phase_4d.dims {
+            anyhow::bail!(
+                "Magnitude image dimensions {:?} do not match phase dimensions {:?}",
+                mag_4d.dims,
+                phase_4d.dims
+            );
+        }
+        if mag_4d.nt != phase_4d.nt {
+            anyhow::bail!(
+                "Magnitude image has {} echoes but phase has {} echoes",
+                mag_4d.nt,
+                phase_4d.nt
+            );
+        }
+
         mag_4d.volumes
     } else {
         vec![vec![1.0; n_voxels]; n_echoes]
