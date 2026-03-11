@@ -186,6 +186,10 @@ fn main() -> Result<()> {
         eprintln!("  voxel size: {:.3}x{:.3}x{:.3} mm", vsx, vsy, vsz);
     }
 
+    if mag_4d.volumes.is_empty() {
+        anyhow::bail!("Magnitude image contains no volumes");
+    }
+
     // Combine magnitude echoes (SNR-like: root sum of squares)
     let mag_combined: Vec<f64> = if mag_4d.nt > 1 {
         let mut combined = vec![0.0f64; n_voxels];
@@ -215,6 +219,9 @@ fn main() -> Result<()> {
                 phase_4d.dims,
                 mag_4d.dims
             );
+        }
+        if phase_4d.volumes.is_empty() {
+            anyhow::bail!("Phase image contains no volumes");
         }
 
         // Use first echo phase for unwrapping
