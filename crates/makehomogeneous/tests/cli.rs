@@ -352,3 +352,77 @@ fn makehomogeneous_small_sigma() {
     assert!(status.success());
     assert!(tmpdir.path().join("homogenous.nii").exists());
 }
+
+// ===== 4D processing tests (Mag.nii is 51x51x41x3) =====
+
+/// 4D: multi-echo magnitude should produce a 4D output.
+#[test]
+fn makehomogeneous_4d_output() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("homogenous");
+    let status = makehomogeneous_bin()
+        .args(["-m", &mag_file(), "-v", "-o", output.to_str().unwrap()])
+        .output()
+        .expect("failed to execute makehomogeneous");
+    assert!(status.status.success());
+    let nii_path = tmpdir.path().join("homogenous.nii");
+    assert!(nii_path.exists());
+    let meta = std::fs::metadata(&nii_path).unwrap();
+    // 4D file: 51*51*41*3*4 + 352 ≈ 1.28MB
+    assert!(
+        meta.len() > 352 + 51 * 51 * 41 * 4,
+        "4D output should be larger than single 3D volume, got {} bytes",
+        meta.len()
+    );
+    let stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(
+        stderr.contains("3 echoes"),
+        "verbose should show echo count"
+    );
+}
+
+/// 4D with --datatype Float32.
+#[test]
+fn makehomogeneous_4d_datatype_float32() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("homogenous");
+    let status = makehomogeneous_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-d",
+            "Float32",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute makehomogeneous");
+    assert!(
+        status.success(),
+        "makehomogeneous 4D with Float32 datatype failed"
+    );
+    assert!(tmpdir.path().join("homogenous.nii").exists());
+}
+
+/// 4D with --datatype Int16.
+#[test]
+fn makehomogeneous_4d_datatype_int16() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("homogenous");
+    let status = makehomogeneous_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-d",
+            "Int16",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute makehomogeneous");
+    assert!(
+        status.success(),
+        "makehomogeneous 4D with Int16 datatype failed"
+    );
+    assert!(tmpdir.path().join("homogenous.nii").exists());
+}

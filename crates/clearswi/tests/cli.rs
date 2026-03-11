@@ -609,3 +609,185 @@ fn clearswi_combined_options() {
     let mip_path = tmpdir.path().join("clearswi_mip.nii");
     assert!(mip_path.exists());
 }
+
+// ===== 4D processing tests (data is 51x51x41x3) =====
+
+/// 4D with --mag-combine average.
+#[test]
+fn clearswi_mag_combine_average() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--mag-combine",
+            "average",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --mag-combine average failed");
+    assert!(output.exists());
+}
+
+/// 4D with --mag-combine echo 2.
+#[test]
+fn clearswi_mag_combine_echo() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--mag-combine",
+            "echo",
+            "2",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --mag-combine echo 2 failed");
+    assert!(output.exists());
+}
+
+/// 4D with --unwrapping-algorithm romeo.
+#[test]
+fn clearswi_unwrapping_romeo() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--unwrapping-algorithm",
+            "romeo",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(
+        status.success(),
+        "clearswi --unwrapping-algorithm romeo failed"
+    );
+    assert!(output.exists());
+}
+
+/// 4D with --echoes selecting a subset.
+#[test]
+fn clearswi_echo_selection() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "-e",
+            "[1, 2]",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi -e '[1, 2]' failed");
+    assert!(output.exists());
+}
+
+/// 4D with --mag-sensitivity-correction off.
+#[test]
+fn clearswi_sensitivity_correction_off() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--mag-sensitivity-correction",
+            "off",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(
+        status.success(),
+        "clearswi --mag-sensitivity-correction off failed"
+    );
+    assert!(output.exists());
+}
+
+/// 4D with --writesteps.
+#[test]
+fn clearswi_writesteps() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let steps_dir = tmpdir.path().join("steps");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--writesteps",
+            steps_dir.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --writesteps failed");
+    assert!(output.exists());
+    assert!(steps_dir.exists(), "writesteps directory was not created");
+    assert!(
+        steps_dir.join("mag_combined.nii").exists(),
+        "mag_combined step was not saved"
+    );
+}
+
+/// 4D with --fix-ge-phase.
+#[test]
+fn clearswi_fix_ge_phase() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--fix-ge-phase",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --fix-ge-phase failed");
+    assert!(output.exists());
+}

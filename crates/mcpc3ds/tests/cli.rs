@@ -421,3 +421,112 @@ fn mcpc3ds_combined_options() {
     assert!(tmpdir.path().join("output_phase_offset.nii").exists());
     assert!(tmpdir.path().join("settings_mcpc3ds.txt").exists());
 }
+
+// ===== 4D processing tests =====
+
+/// 4D with --bipolar (eddy current correction).
+#[test]
+fn mcpc3ds_bipolar() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("output");
+    let status = mcpc3ds_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--bipolar",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute mcpc3ds");
+    assert!(status.success(), "mcpc3ds --bipolar failed");
+    assert!(tmpdir.path().join("output.nii").exists());
+}
+
+/// 4D with --writesteps.
+#[test]
+fn mcpc3ds_writesteps() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("output");
+    let steps_dir = tmpdir.path().join("steps");
+    let status = mcpc3ds_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--writesteps",
+            steps_dir.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute mcpc3ds");
+    assert!(status.success(), "mcpc3ds --writesteps failed");
+    assert!(tmpdir.path().join("output.nii").exists());
+    assert!(steps_dir.exists(), "writesteps directory was not created");
+    assert!(
+        steps_dir.join("phase_offset.nii").exists(),
+        "phase_offset step was not saved"
+    );
+}
+
+/// 4D with --fix-ge-phase.
+#[test]
+fn mcpc3ds_fix_ge_phase() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("output");
+    let status = mcpc3ds_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--fix-ge-phase",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute mcpc3ds");
+    assert!(status.success(), "mcpc3ds --fix-ge-phase failed");
+    assert!(tmpdir.path().join("output.nii").exists());
+}
+
+/// 4D combined: bipolar + writesteps + fix-ge-phase + verbose.
+#[test]
+fn mcpc3ds_4d_combined() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("output");
+    let steps_dir = tmpdir.path().join("steps");
+    let status = mcpc3ds_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--bipolar",
+            "--fix-ge-phase",
+            "--write-phase-offsets",
+            "--writesteps",
+            steps_dir.to_str().unwrap(),
+            "-v",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute mcpc3ds");
+    assert!(status.success(), "mcpc3ds 4D combined failed");
+    assert!(tmpdir.path().join("output.nii").exists());
+    assert!(tmpdir.path().join("output_phase_offset.nii").exists());
+    assert!(steps_dir.exists());
+}
