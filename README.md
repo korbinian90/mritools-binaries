@@ -64,6 +64,7 @@ romeo -p phase.nii -o unwrapped.nii -k robustmask
 
 ```
 clearswi -m magnitude.nii -p phase.nii -o clearswi.nii -t "[1.5,3.0]"
+clearswi -m magnitude.nii -p phase.nii -o clearswi.nii -t "[1.5,3.0]" --qsm
 ```
 
 ### mcpc3ds

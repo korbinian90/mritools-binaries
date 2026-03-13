@@ -12,6 +12,7 @@ use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, save_settings,
     select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData, NiftiData4D,
 };
+use qsm_core::inversion::tgv::{tgv_qsm, TgvParams};
 use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::swi::{calculate_swi, create_mip, softplus_scaling, PhaseScaling};
 use qsm_core::unwrap::laplacian::laplacian_unwrap;
@@ -113,16 +114,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Warn about flags that require external QSM pipeline
-    if cli.qsm {
-        eprintln!("WARNING: --qsm TGV pipeline is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.qsm_input.is_some() {
-        eprintln!("WARNING: --qsm-input is not yet implemented in this Rust port, ignoring");
-    }
-    if cli.qsm_mask.is_some() {
-        eprintln!("WARNING: --qsm-mask is not yet implemented in this Rust port, ignoring");
-    }
+    let use_qsm = cli.qsm || cli.qsm_input.is_some();
 
     let magnitude = cli
         .magnitude
@@ -262,8 +254,206 @@ fn main() -> Result<()> {
         write_step(dir, "mag_combined", &mag_corrected, &mag_4d)?;
     }
 
-    // Get phase data (load and unwrap, or default to zeros if no phase provided)
-    let unwrapped_phase: Vec<f64> = if let Some(ref phase_path) = cli.phase {
+    // Get phase data: QSM path or standard unwrap path
+    let unwrapped_phase: Vec<f64> = if let Some(ref qsm_input_path) = cli.qsm_input {
+        // --qsm-input: load pre-computed QSM directly
+        let qsm_4d = read_nifti_4d(qsm_input_path)
+            .with_context(|| format!("Failed to read QSM input '{}'", qsm_input_path))?;
+        if qsm_4d.dims != mag_4d.dims {
+            anyhow::bail!(
+                "QSM input dimensions {:?} do not match magnitude dimensions {:?}",
+                qsm_4d.dims,
+                mag_4d.dims
+            );
+        }
+        if qsm_4d.volumes.is_empty() {
+            anyhow::bail!("QSM input contains no volumes");
+        }
+        if cli.verbose {
+            eprintln!("  using pre-computed QSM input: {}", qsm_input_path);
+        }
+        qsm_4d.volumes[0].clone()
+    } else if use_qsm {
+        // --qsm: compute TGV-QSM from phase
+        // For multi-echo data, combine all echoes before QSM (matching Julia CLEARSWI.jl)
+        let phase_path = cli
+            .phase
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--phase / -p is required when --qsm is used"))?;
+        let mut phase_4d = read_nifti_4d(phase_path)
+            .with_context(|| format!("Failed to read phase image '{}'", phase_path))?;
+
+        if let Some(sel) = parse_echo_selection(&cli.echoes, phase_4d.nt) {
+            phase_4d = select_volumes(&phase_4d, &sel);
+        }
+
+        if phase_4d.dims != mag_4d.dims {
+            anyhow::bail!(
+                "Phase image dimensions {:?} do not match magnitude dimensions {:?}",
+                phase_4d.dims,
+                mag_4d.dims
+            );
+        }
+        if phase_4d.volumes.is_empty() {
+            anyhow::bail!("Phase image contains no volumes");
+        }
+
+        // Build QSM mask: use --qsm-mask if provided, otherwise the magnitude mask
+        let qsm_mask: Vec<u8> = if let Some(ref mask_path) = cli.qsm_mask {
+            let mask_4d = read_nifti_4d(mask_path)
+                .with_context(|| format!("Failed to read QSM mask '{}'", mask_path))?;
+            if mask_4d.dims != mag_4d.dims {
+                anyhow::bail!(
+                    "QSM mask dimensions {:?} do not match magnitude dimensions {:?}",
+                    mask_4d.dims,
+                    mag_4d.dims
+                );
+            }
+            if mask_4d.volumes.is_empty() {
+                anyhow::bail!("QSM mask contains no volumes");
+            }
+            mask_4d.volumes[0]
+                .iter()
+                .map(|&v| if v > 0.5 { 1u8 } else { 0u8 })
+                .collect()
+        } else {
+            mask.clone()
+        };
+
+        // Combine multi-echo phase before QSM
+        // For multi-echo: unwrap each echo, combine via weighted average (mag²·TE²)
+        // For single echo: use directly
+        let (phase_for_tgv, effective_te_s) = if phase_4d.nt > 1
+            && echo_times.len() >= phase_4d.nt
+            && mag_4d.nt >= phase_4d.nt
+        {
+            if cli.verbose {
+                eprintln!(
+                    "  QSM: combining {} echoes (Laplacian unwrap + weighted average)",
+                    phase_4d.nt
+                );
+            }
+
+            // Unwrap each echo and combine
+            let mut combined = vec![0.0_f64; n_voxels];
+            let mut weight_sum = vec![0.0_f64; n_voxels];
+
+            for e in 0..phase_4d.nt {
+                let mut phase_e = phase_4d.volumes[e].clone();
+                if !cli.no_phase_rescale {
+                    rescale_phase(&mut phase_e);
+                }
+                if cli.fix_ge_phase {
+                    fix_ge_phase_slices(&mut phase_e, nx, ny, nz);
+                }
+
+                // Laplacian unwrap this echo
+                let unwrapped =
+                    laplacian_unwrap(&phase_e, &qsm_mask, nx, ny, nz, vsx, vsy, vsz);
+
+                // Weighted average: weight = mag²·TE²
+                // Matching Julia weighted_average: Σ(val·mag²·TE²) / Σ(mag²·TE²)
+                let te = echo_times[e];
+                let te_sq = te * te;
+                let mag_e = &mag_4d.volumes[e];
+                for i in 0..n_voxels {
+                    let w = mag_e[i] * mag_e[i] * te_sq;
+                    combined[i] += unwrapped[i] * w;
+                    weight_sum[i] += w;
+                }
+            }
+
+            // Normalize by weight sum
+            for i in 0..n_voxels {
+                if weight_sum[i] > 1e-10 {
+                    combined[i] /= weight_sum[i];
+                }
+            }
+
+            if let Some(dir) = writesteps_dir {
+                write_step(dir, "phase_combined", &combined, &mag_4d)?;
+            }
+
+            // Use last echo TE (dominates the weighting)
+            let effective_te = (*echo_times.last().unwrap() / 1000.0) as f32;
+            (combined, effective_te)
+        } else {
+            // Single echo or insufficient echo times: use first echo directly
+            let mut phase_data = phase_4d.volumes[0].clone();
+            if !cli.no_phase_rescale {
+                rescale_phase(&mut phase_data);
+            }
+            if cli.fix_ge_phase {
+                fix_ge_phase_slices(&mut phase_data, nx, ny, nz);
+                if cli.verbose {
+                    eprintln!("  applied GE phase slice-jump correction");
+                }
+            }
+
+            if let Some(dir) = writesteps_dir {
+                write_step(dir, "phase_rescaled", &phase_data, &mag_4d)?;
+            }
+
+            // Default 20ms matches typical 3T GRE protocols
+            let te = if !echo_times.is_empty() {
+                (echo_times[0] / 1000.0) as f32
+            } else {
+                0.020
+            };
+            (phase_data, te)
+        };
+
+        let tgv_params = TgvParams {
+            iterations: 800,
+            erosions: 0,
+            te: effective_te_s,
+            ..TgvParams::default()
+        };
+
+        if cli.verbose {
+            eprintln!(
+                "  TGV-QSM: TE={:.3}ms, α₁={}, α₀={}, {} iterations",
+                tgv_params.te * 1000.0,
+                tgv_params.alpha1,
+                tgv_params.alpha0,
+                tgv_params.iterations,
+            );
+        }
+
+        // Convert phase to f32 for TGV
+        let phase_f32: Vec<f32> = phase_for_tgv.iter().map(|&v| v as f32).collect();
+
+        // B0 field direction: assume standard axial acquisition (z-axis)
+        let b0_dir = (0.0_f32, 0.0_f32, 1.0_f32);
+        let chi = tgv_qsm(
+            &phase_f32,
+            &qsm_mask,
+            nx,
+            ny,
+            nz,
+            vsx as f32,
+            vsy as f32,
+            vsz as f32,
+            &tgv_params,
+            b0_dir,
+        );
+
+        // Convert back to f64
+        let qsm_result: Vec<f64> = chi.iter().map(|&v| v as f64).collect();
+
+        if cli.verbose {
+            let qmin = qsm_result.iter().cloned().fold(f64::INFINITY, f64::min);
+            let qmax = qsm_result.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            eprintln!("  QSM range: [{:.6}, {:.6}]", qmin, qmax);
+        }
+
+        if let Some(dir) = writesteps_dir {
+            write_step(dir, "qsm", &qsm_result, &mag_4d)?;
+        }
+
+        qsm_result
+    } else if let Some(ref phase_path) = cli.phase {
+        // Standard phase unwrapping path
         let mut phase_4d = read_nifti_4d(phase_path)
             .with_context(|| format!("Failed to read phase image '{}'", phase_path))?;
 
