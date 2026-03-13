@@ -323,7 +323,9 @@ fn main() -> Result<()> {
         // Combine multi-echo phase before QSM
         // For multi-echo: unwrap each echo, combine via weighted average (mag²·TE²)
         // For single echo: use directly
-        let (phase_for_tgv, effective_te_s) = if phase_4d.nt > 1 && echo_times.len() >= phase_4d.nt
+        let (phase_for_tgv, effective_te_s) = if phase_4d.nt > 1
+            && echo_times.len() >= phase_4d.nt
+            && mag_4d.nt >= phase_4d.nt
         {
             if cli.verbose {
                 eprintln!(
@@ -353,7 +355,7 @@ fn main() -> Result<()> {
                 // Matching Julia weighted_average: Σ(val·mag²·TE²) / Σ(mag²·TE²)
                 let te = echo_times[e];
                 let te_sq = te * te;
-                let mag_e = &mag_4d.volumes[e.min(mag_4d.nt - 1)];
+                let mag_e = &mag_4d.volumes[e];
                 for i in 0..n_voxels {
                     let w = mag_e[i] * mag_e[i] * te_sq;
                     combined[i] += unwrapped[i] * w;
