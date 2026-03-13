@@ -336,7 +336,8 @@ fn main() -> Result<()> {
             mask.clone()
         };
 
-        // Determine echo time for TGV (first echo time in seconds, default 20ms)
+        // Determine echo time for TGV (first echo time in seconds)
+        // Default 20ms matches typical 3T GRE protocols
         let te_s: f32 = if !echo_times.is_empty() {
             (echo_times[0] / 1000.0) as f32
         } else {
@@ -363,6 +364,7 @@ fn main() -> Result<()> {
         // Convert phase to f32 for TGV
         let phase_f32: Vec<f32> = phase_data.iter().map(|&v| v as f32).collect();
 
+        // B0 field direction: assume standard axial acquisition (z-axis)
         let b0_dir = (0.0_f32, 0.0_f32, 1.0_f32);
         let chi = tgv_qsm(
             &phase_f32,
