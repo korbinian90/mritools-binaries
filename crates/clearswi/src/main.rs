@@ -323,85 +323,86 @@ fn main() -> Result<()> {
         // Combine multi-echo phase before QSM
         // For multi-echo: unwrap each echo, combine via weighted average (mag²·TE²)
         // For single echo: use directly
-        let (phase_for_tgv, effective_te_s) = if phase_4d.nt > 1
-            && echo_times.len() >= phase_4d.nt
-            && mag_4d.nt >= phase_4d.nt
-        {
-            if cli.verbose {
-                eprintln!(
-                    "  QSM: combining {} echoes (Laplacian unwrap + weighted average)",
-                    phase_4d.nt
-                );
-            }
+        let (phase_for_tgv, effective_te_s) =
+            if phase_4d.nt > 1 && echo_times.len() >= phase_4d.nt && mag_4d.nt >= phase_4d.nt {
+                if cli.verbose {
+                    eprintln!(
+                        "  QSM: combining {} echoes (Laplacian unwrap + weighted average)",
+                        phase_4d.nt
+                    );
+                }
 
-            // Unwrap each echo and combine
-            let mut combined = vec![0.0_f64; n_voxels];
-            let mut weight_sum = vec![0.0_f64; n_voxels];
+                // Unwrap each echo and combine
+                let mut combined = vec![0.0_f64; n_voxels];
+                let mut weight_sum = vec![0.0_f64; n_voxels];
 
-            for e in 0..phase_4d.nt {
-                let mut phase_e = phase_4d.volumes[e].clone();
+                for ((phase_vol, &te), mag_vol) in phase_4d
+                    .volumes
+                    .iter()
+                    .zip(echo_times.iter())
+                    .zip(mag_4d.volumes.iter())
+                {
+                    let mut phase_e = phase_vol.clone();
+                    if !cli.no_phase_rescale {
+                        rescale_phase(&mut phase_e);
+                    }
+                    if cli.fix_ge_phase {
+                        fix_ge_phase_slices(&mut phase_e, nx, ny, nz);
+                    }
+
+                    // Laplacian unwrap this echo
+                    let unwrapped =
+                        laplacian_unwrap(&phase_e, &qsm_mask, nx, ny, nz, vsx, vsy, vsz);
+
+                    // Weighted average: weight = mag²·TE²
+                    // Matching Julia weighted_average: Σ(val·mag²·TE²) / Σ(mag²·TE²)
+                    let te_sq = te * te;
+                    for i in 0..n_voxels {
+                        let w = mag_vol[i] * mag_vol[i] * te_sq;
+                        combined[i] += unwrapped[i] * w;
+                        weight_sum[i] += w;
+                    }
+                }
+
+                // Normalize by weight sum
+                for i in 0..n_voxels {
+                    if weight_sum[i] > 1e-10 {
+                        combined[i] /= weight_sum[i];
+                    }
+                }
+
+                if let Some(dir) = writesteps_dir {
+                    write_step(dir, "phase_combined", &combined, &mag_4d)?;
+                }
+
+                // Use last echo TE (dominates the weighting)
+                let effective_te = (*echo_times.last().unwrap() / 1000.0) as f32;
+                (combined, effective_te)
+            } else {
+                // Single echo or insufficient echo times: use first echo directly
+                let mut phase_data = phase_4d.volumes[0].clone();
                 if !cli.no_phase_rescale {
-                    rescale_phase(&mut phase_e);
+                    rescale_phase(&mut phase_data);
                 }
                 if cli.fix_ge_phase {
-                    fix_ge_phase_slices(&mut phase_e, nx, ny, nz);
+                    fix_ge_phase_slices(&mut phase_data, nx, ny, nz);
+                    if cli.verbose {
+                        eprintln!("  applied GE phase slice-jump correction");
+                    }
                 }
 
-                // Laplacian unwrap this echo
-                let unwrapped =
-                    laplacian_unwrap(&phase_e, &qsm_mask, nx, ny, nz, vsx, vsy, vsz);
-
-                // Weighted average: weight = mag²·TE²
-                // Matching Julia weighted_average: Σ(val·mag²·TE²) / Σ(mag²·TE²)
-                let te = echo_times[e];
-                let te_sq = te * te;
-                let mag_e = &mag_4d.volumes[e];
-                for i in 0..n_voxels {
-                    let w = mag_e[i] * mag_e[i] * te_sq;
-                    combined[i] += unwrapped[i] * w;
-                    weight_sum[i] += w;
+                if let Some(dir) = writesteps_dir {
+                    write_step(dir, "phase_rescaled", &phase_data, &mag_4d)?;
                 }
-            }
 
-            // Normalize by weight sum
-            for i in 0..n_voxels {
-                if weight_sum[i] > 1e-10 {
-                    combined[i] /= weight_sum[i];
-                }
-            }
-
-            if let Some(dir) = writesteps_dir {
-                write_step(dir, "phase_combined", &combined, &mag_4d)?;
-            }
-
-            // Use last echo TE (dominates the weighting)
-            let effective_te = (*echo_times.last().unwrap() / 1000.0) as f32;
-            (combined, effective_te)
-        } else {
-            // Single echo or insufficient echo times: use first echo directly
-            let mut phase_data = phase_4d.volumes[0].clone();
-            if !cli.no_phase_rescale {
-                rescale_phase(&mut phase_data);
-            }
-            if cli.fix_ge_phase {
-                fix_ge_phase_slices(&mut phase_data, nx, ny, nz);
-                if cli.verbose {
-                    eprintln!("  applied GE phase slice-jump correction");
-                }
-            }
-
-            if let Some(dir) = writesteps_dir {
-                write_step(dir, "phase_rescaled", &phase_data, &mag_4d)?;
-            }
-
-            // Default 20ms matches typical 3T GRE protocols
-            let te = if !echo_times.is_empty() {
-                (echo_times[0] / 1000.0) as f32
-            } else {
-                0.020
+                // Default 20ms matches typical 3T GRE protocols
+                let te = if !echo_times.is_empty() {
+                    (echo_times[0] / 1000.0) as f32
+                } else {
+                    0.020
+                };
+                (phase_data, te)
             };
-            (phase_data, te)
-        };
 
         let tgv_params = TgvParams {
             iterations: 800,
