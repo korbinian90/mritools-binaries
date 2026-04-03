@@ -791,3 +791,111 @@ fn clearswi_fix_ge_phase() {
     assert!(status.success(), "clearswi --fix-ge-phase failed");
     assert!(output.exists());
 }
+
+// ===== QSM flags =====
+
+/// Test --qsm with --qsm-mask using a single-volume NIfTI as mask.
+#[test]
+fn clearswi_qsm_with_mask() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    // First, produce a single-volume NIfTI to use as a mask
+    let swi_output = tmpdir.path().join("swi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "-o",
+            swi_output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "setup run failed");
+    assert!(swi_output.exists());
+
+    // Use that output as --qsm-mask (values in [0,1], not all-ones)
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--qsm",
+            "--qsm-mask",
+            swi_output.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --qsm --qsm-mask failed");
+    assert!(output.exists());
+}
+
+/// Test --qsm-input with a single-volume NIfTI produced by a prior clearswi run.
+#[test]
+fn clearswi_qsm_input() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    // First, produce a single-volume NIfTI via a normal clearswi run
+    let swi_output = tmpdir.path().join("swi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "-o",
+            swi_output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "setup run failed");
+    assert!(swi_output.exists());
+
+    // Now use that single-volume NIfTI as --qsm-input
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--qsm-input",
+            swi_output.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --qsm-input failed");
+    assert!(output.exists());
+}
+
+/// Test --qsm-input rejects multi-volume NIfTI (4D data).
+#[test]
+fn clearswi_qsm_input_rejects_multivolume() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    // Phase.nii has 3 echoes; --qsm-input should reject it
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "--qsm-input",
+            &phase_file(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(
+        !status.success(),
+        "clearswi --qsm-input should reject multi-volume NIfTI"
+    );
+}
