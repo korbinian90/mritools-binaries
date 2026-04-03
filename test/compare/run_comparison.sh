@@ -150,17 +150,15 @@ if [[ "$SKIP_JULIA" == false ]]; then
         # Check if Julia packages are installed
         echo "  Checking Julia packages..."
         "$JULIA_BIN" --project="$JULIA_PROJECT" -e '
-            import Pkg
-            Pkg.instantiate()
             using ROMEO, CLEARSWI, MriResearchTools, NIfTI, ArgParse
             println("  ✓ All Julia packages available")
         ' 2>&1 || {
-            echo "  Julia packages not yet installed. Installing..."
-            "$JULIA_BIN" --project="$JULIA_PROJECT" -e '
-                import Pkg
-                Pkg.instantiate()
-                Pkg.precompile()
-            ' 2>&1
+            echo "  Julia packages not yet installed. Running setup..."
+            "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/setup.jl" 2>&1 || {
+                echo "ERROR: Julia package installation failed"
+                echo "  Run manually: julia --project=$JULIA_PROJECT $JULIA_PROJECT/setup.jl"
+                SKIP_JULIA=true
+            }
         }
         echo ""
     fi

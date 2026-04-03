@@ -37,7 +37,7 @@ cargo build --workspace --release
 ### Julia
 Install [Julia](https://julialang.org/downloads/) (≥ 1.9), then install the required packages:
 ```bash
-julia --project=test/compare/julia -e 'import Pkg; Pkg.instantiate(); Pkg.precompile()'
+julia --project=test/compare/julia test/compare/julia/setup.jl
 ```
 
 The Julia project (`test/compare/julia/Project.toml`) depends on:
