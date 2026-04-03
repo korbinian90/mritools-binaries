@@ -1,0 +1,6 @@
+[deps]
+ROMEO = "1"
+CLEARSWI = "0.5"
+MriResearchTools = "3"
+NIfTI = "0.5"
+ArgParse = "1"
