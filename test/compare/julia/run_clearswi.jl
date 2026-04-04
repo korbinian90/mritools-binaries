@@ -73,11 +73,18 @@ function main()
 
         # Rescale phase to [-π, π] if not disabled
         if !args["no-rescale"]
-            for echo in 1:size(pdata, 4)
-                vol = @view pdata[:, :, :, echo]
-                mn, mx = extrema(vol)
+            if ndims(pdata) == 4
+                for echo in 1:size(pdata, 4)
+                    vol = @view pdata[:, :, :, echo]
+                    mn, mx = extrema(vol)
+                    if abs(mx - mn) > 1e-10
+                        vol .= (vol .- mn) ./ (mx - mn) .* 2π .- π
+                    end
+                end
+            else
+                mn, mx = extrema(pdata)
                 if abs(mx - mn) > 1e-10
-                    vol .= (vol .- mn) ./ (mx - mn) .* 2π .- π
+                    pdata .= (pdata .- mn) ./ (mx - mn) .* 2π .- π
                 end
             end
         end

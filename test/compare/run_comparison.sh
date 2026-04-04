@@ -66,7 +66,7 @@ while [[ $# -gt 0 ]]; do
         --skip-julia)    SKIP_JULIA=true; shift ;;
         --verbose)       VERBOSE=true; shift ;;
         --help|-h)
-            sed -n '2,/^# =====/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+            sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -90,7 +90,7 @@ fi
 
 RUST_OUT="$OUTPUT_DIR/rust"
 JULIA_OUT="$OUTPUT_DIR/julia"
-mkdir -p "$RUST_OUT" "$JULIA_OUT"
+mkdir -p "$RUST_OUT"
 
 # Convert echo times to formats needed by each tool
 # Rust uses space-separated or Julia range syntax: "1:3" or "1 2 3"
@@ -177,43 +177,58 @@ run_rust_tool() {
 
     case "$tool" in
         romeo)
-            "$RUST_BIN_DIR/romeo" \
+            if ! "$RUST_BIN_DIR/romeo" \
                 -p "$PHASE_PATH" \
                 -m "$MAG_PATH" \
                 -t $RUST_ECHO_ARGS \
-                -B \
+                -B "$out_dir/B0.nii" \
                 -o "$out_dir/unwrapped.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Rust tool failed: $tool"
+                return 1
+            fi
             ;;
         clearswi)
-            "$RUST_BIN_DIR/clearswi" \
+            if ! "$RUST_BIN_DIR/clearswi" \
                 -m "$MAG_PATH" \
                 -p "$PHASE_PATH" \
                 -t $RUST_ECHO_ARGS \
                 -o "$out_dir/clearswi.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Rust tool failed: $tool"
+                return 1
+            fi
             ;;
         mcpc3ds)
-            "$RUST_BIN_DIR/mcpc3ds" \
+            if ! "$RUST_BIN_DIR/mcpc3ds" \
                 -p "$PHASE_PATH" \
                 -m "$MAG_PATH" \
                 -t $RUST_ECHO_ARGS \
                 -o "$out_dir/output" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Rust tool failed: $tool"
+                return 1
+            fi
             ;;
         makehomogeneous)
-            "$RUST_BIN_DIR/makehomogeneous" \
+            if ! "$RUST_BIN_DIR/makehomogeneous" \
                 -m "$MAG_PATH" \
                 -o "$out_dir/homogeneous" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Rust tool failed: $tool"
+                return 1
+            fi
             ;;
         romeo_mask)
-            "$RUST_BIN_DIR/romeo_mask" \
+            if ! "$RUST_BIN_DIR/romeo_mask" \
                 -p "$PHASE_PATH" \
                 -m "$MAG_PATH" \
                 -t $RUST_ECHO_ARGS \
                 -o "$out_dir/mask.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Rust tool failed: $tool"
+                return 1
+            fi
             ;;
         *)
             echo "    Unknown tool: $tool"
@@ -223,7 +238,7 @@ run_rust_tool() {
 
     # List outputs
     local n_files
-    n_files=$(find "$out_dir" -name "*.nii" -o -name "*.nii.gz" | wc -l)
+    n_files=$(find "$out_dir" \( -name "*.nii" -o -name "*.nii.gz" \) -type f | wc -l)
     echo "    → $n_files output file(s) in $out_dir"
 }
 
@@ -236,43 +251,58 @@ run_julia_tool() {
 
     case "$tool" in
         romeo)
-            "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_romeo.jl" \
+            if ! "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_romeo.jl" \
                 --phase "$PHASE_PATH" \
                 --magnitude "$MAG_PATH" \
                 $JULIA_ECHO_ARGS \
                 --compute-B0 \
                 --output "$out_dir/unwrapped.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Julia tool failed: $tool"
+                return 1
+            fi
             ;;
         clearswi)
-            "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_clearswi.jl" \
+            if ! "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_clearswi.jl" \
                 --magnitude "$MAG_PATH" \
                 --phase "$PHASE_PATH" \
                 $JULIA_ECHO_ARGS \
                 --output "$out_dir/clearswi.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Julia tool failed: $tool"
+                return 1
+            fi
             ;;
         mcpc3ds)
-            "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_mcpc3ds.jl" \
+            if ! "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_mcpc3ds.jl" \
                 --phase "$PHASE_PATH" \
                 --magnitude "$MAG_PATH" \
                 $JULIA_ECHO_ARGS \
                 --output "$out_dir/output.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Julia tool failed: $tool"
+                return 1
+            fi
             ;;
         makehomogeneous)
-            "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_makehomogeneous.jl" \
+            if ! "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_makehomogeneous.jl" \
                 --magnitude "$MAG_PATH" \
                 --output "$out_dir/homogeneous.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Julia tool failed: $tool"
+                return 1
+            fi
             ;;
         romeo_mask)
-            "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_romeo_mask.jl" \
+            if ! "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_romeo_mask.jl" \
                 --phase "$PHASE_PATH" \
                 --magnitude "$MAG_PATH" \
                 $JULIA_ECHO_ARGS \
                 --output "$out_dir/mask.nii" \
-                2>&1 | { $VERBOSE && cat || tail -1; } || true
+                2>&1 | { $VERBOSE && cat || tail -1; }; then
+                echo "    Julia tool failed: $tool"
+                return 1
+            fi
             ;;
         *)
             echo "    Unknown tool: $tool"
@@ -281,7 +311,7 @@ run_julia_tool() {
     esac
 
     local n_files
-    n_files=$(find "$out_dir" -name "*.nii" -o -name "*.nii.gz" | wc -l)
+    n_files=$(find "$out_dir" \( -name "*.nii" -o -name "*.nii.gz" \) -type f | wc -l)
     echo "    → $n_files output file(s) in $out_dir"
 }
 
@@ -314,6 +344,13 @@ fi
 echo "────────────────────────────────────────────────────────────"
 echo "Comparing outputs (tolerance=$TOLERANCE)"
 echo "────────────────────────────────────────────────────────────"
+
+# Skip comparison when Julia never ran and no previous output exists
+if [[ "$SKIP_JULIA" == true && ! -d "$JULIA_OUT" ]]; then
+    echo "  Skipping comparison: Julia was not run and no previous Julia output exists"
+    echo ""
+    exit 0
+fi
 
 COMPARE_SCRIPT="$JULIA_PROJECT/compare_nifti.jl"
 OVERALL_PASS=true
@@ -373,6 +410,7 @@ for tool in "${TOOL_LIST[@]}"; do
 
     if [[ "$found_any" == false ]]; then
         echo "  No matching NIfTI files to compare"
+        OVERALL_PASS=false
     fi
 done
 

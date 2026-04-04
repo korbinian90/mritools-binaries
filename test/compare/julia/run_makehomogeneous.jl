@@ -47,7 +47,7 @@ function main()
     if ndims(mag_data) == 4
         result = similar(mag_data)
         for echo in 1:size(mag_data, 4)
-            vol = mag_data[:, :, :, echo]
+            vol = @view mag_data[:, :, :, echo]
             result[:, :, :, echo] = makehomogeneous(vol;
                 sigma_mm=args["sigma"],
                 nbox=args["nbox"]

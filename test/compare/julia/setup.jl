@@ -8,20 +8,7 @@ import Pkg
 Pkg.activate(@__DIR__)
 
 println("Installing Julia comparison test dependencies...")
-
-packages = [
-    "ROMEO",
-    "CLEARSWI",
-    "MriResearchTools",
-    "NIfTI",
-    "ArgParse",
-    "JSON3",
-]
-
-for pkg in packages
-    println("  Adding $pkg...")
-    Pkg.add(pkg)
-end
+Pkg.instantiate()
 
 println("Precompiling packages...")
 Pkg.precompile()

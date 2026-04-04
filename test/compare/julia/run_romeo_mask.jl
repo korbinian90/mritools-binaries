@@ -54,11 +54,18 @@ function main()
 
     # Rescale phase to [-π, π] if not disabled
     if !args["no-rescale"]
-        for echo in 1:size(phase_data, 4)
-            vol = @view phase_data[:, :, :, echo]
-            mn, mx = extrema(vol)
+        if ndims(phase_data) == 4
+            for echo in 1:size(phase_data, 4)
+                vol = @view phase_data[:, :, :, echo]
+                mn, mx = extrema(vol)
+                if abs(mx - mn) > 1e-10
+                    vol .= (vol .- mn) ./ (mx - mn) .* 2π .- π
+                end
+            end
+        else
+            mn, mx = extrema(phase_data)
             if abs(mx - mn) > 1e-10
-                vol .= (vol .- mn) ./ (mx - mn) .* 2π .- π
+                phase_data .= (phase_data .- mn) ./ (mx - mn) .* 2π .- π
             end
         end
     end

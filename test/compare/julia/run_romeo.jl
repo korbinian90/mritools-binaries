@@ -60,11 +60,18 @@ function main()
 
     # Rescale phase to [-π, π] if not disabled (matches Rust default behavior)
     if !args["no-rescale"]
-        for echo in 1:size(phase_data, 4)
-            vol = @view phase_data[:, :, :, echo]
-            mn, mx = extrema(vol)
+        if ndims(phase_data) == 4
+            for echo in 1:size(phase_data, 4)
+                vol = @view phase_data[:, :, :, echo]
+                mn, mx = extrema(vol)
+                if abs(mx - mn) > 1e-10
+                    vol .= (vol .- mn) ./ (mx - mn) .* 2π .- π
+                end
+            end
+        else
+            mn, mx = extrema(phase_data)
             if abs(mx - mn) > 1e-10
-                vol .= (vol .- mn) ./ (mx - mn) .* 2π .- π
+                phase_data .= (phase_data .- mn) ./ (mx - mn) .* 2π .- π
             end
         end
     end
@@ -120,7 +127,7 @@ function main()
 
     # B0 computation
     if args["compute-B0"]
-        b0_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_B0.nii"
+        b0_path = joinpath(dirname(abspath(output_path)), "B0.nii")
         if ndims(unwrapped) == 4 && length(TEs) >= 2
             b0 = calculateB0_unwrapped(unwrapped, TEs)
             savenii(b0, b0_path; header=phase_nii.header)

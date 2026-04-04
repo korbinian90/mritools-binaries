@@ -289,8 +289,9 @@ function main()
         end
     end
 
+    has_errors = any(r -> haskey(r, "error"), results)
     all_pass = all(r -> get(r, "pass", false), results)
-    exit(all_pass ? 0 : 1)
+    exit(has_errors ? 2 : (all_pass ? 0 : 1))
 end
 
 main()
