@@ -15,6 +15,7 @@ packages = [
     "MriResearchTools",
     "NIfTI",
     "ArgParse",
+    "JSON3",
 ]
 
 for pkg in packages

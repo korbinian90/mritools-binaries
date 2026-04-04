@@ -22,8 +22,8 @@ Compare NIfTI outputs between the Rust `mritools-binaries` and the original Juli
 ./test/compare/run_comparison.sh --tolerance 1e-3
 
 # Only compare NIfTI files directly (no Rust/Julia run)
-python3 test/compare/compare_nifti.py rust_output.nii julia_output.nii
-python3 test/compare/compare_nifti.py --dir rust_output_dir/ julia_output_dir/
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl rust_output.nii julia_output.nii
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl --dir rust_output_dir/ julia_output_dir/
 ```
 
 ## Prerequisites
@@ -46,16 +46,14 @@ The Julia project (`test/compare/julia/Project.toml`) depends on:
 - `MriResearchTools.jl` — mcpc3ds, makehomogeneous, NIfTI I/O
 - `NIfTI.jl` — NIfTI file reading
 - `ArgParse.jl` — CLI argument parsing
-
-### Python (for comparison only)
-Python 3 with standard library only. No external packages needed.
+- `JSON3.jl` — JSON output for comparison results
 
 ## Files
 
 | File | Description |
 |------|-------------|
 | `run_comparison.sh` | Main orchestration script — builds, runs, compares |
-| `compare_nifti.py` | NIfTI file comparison utility (no external deps) |
+| `julia/compare_nifti.jl` | NIfTI file comparison utility using NIfTI.jl |
 | `julia/Project.toml` | Julia package dependencies |
 | `julia/run_romeo.jl` | Julia runner for ROMEO phase unwrapping |
 | `julia/run_clearswi.jl` | Julia runner for CLEARSWI |
@@ -83,14 +81,14 @@ Python 3 with standard library only. No external packages needed.
 | `--skip-julia` | off | Reuse previous Julia output |
 | `--verbose` | off | Show detailed output and diff distribution |
 
-### `compare_nifti.py`
+### `compare_nifti.jl`
 
 ```bash
 # Compare two files
-python3 compare_nifti.py file1.nii file2.nii [--tolerance 1e-6] [--verbose] [--json]
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl file1.nii file2.nii [--tolerance 1e-6] [--verbose] [--json]
 
 # Compare all matching NIfTI files in two directories
-python3 compare_nifti.py --dir dir1/ dir2/ [--tolerance 1e-6]
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl --dir dir1/ dir2/ [--tolerance 1e-6]
 ```
 
 **Output metrics:**
@@ -136,13 +134,13 @@ When FAIL is reported, use detailed output to diagnose:
 
 ```bash
 # Verbose comparison with diff distribution
-python3 test/compare/compare_nifti.py \
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl \
     /tmp/mritools_compare/rust/romeo/unwrapped.nii \
     /tmp/mritools_compare/julia/romeo/unwrapped.nii \
     --verbose
 
 # JSON output for programmatic analysis
-python3 test/compare/compare_nifti.py \
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl \
     /tmp/mritools_compare/rust/romeo/unwrapped.nii \
     /tmp/mritools_compare/julia/romeo/unwrapped.nii \
     --json

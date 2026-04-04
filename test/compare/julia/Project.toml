@@ -1,1 +1,7 @@
 [deps]
+ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+CLEARSWI = "06ae4d9b-ce5e-4813-a1b3-426e46312ec2"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+MriResearchTools = "557dad86-b9bd-4533-8525-1a39684d020f"
+NIfTI = "a3a9e032-41b5-5fc4-967a-a6b7a19844d3"
+ROMEO = "1ea8258b-a15d-4adb-ad20-01632f467a84"

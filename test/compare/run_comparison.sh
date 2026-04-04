@@ -150,7 +150,7 @@ if [[ "$SKIP_JULIA" == false ]]; then
         # Check if Julia packages are installed
         echo "  Checking Julia packages..."
         "$JULIA_BIN" --project="$JULIA_PROJECT" -e '
-            using ROMEO, CLEARSWI, MriResearchTools, NIfTI, ArgParse
+            using ROMEO, CLEARSWI, MriResearchTools, NIfTI, ArgParse, JSON3
             println("  ✓ All Julia packages available")
         ' 2>&1 || {
             echo "  Julia packages not yet installed. Running setup..."
@@ -315,7 +315,7 @@ echo "────────────────────────�
 echo "Comparing outputs (tolerance=$TOLERANCE)"
 echo "────────────────────────────────────────────────────────────"
 
-COMPARE_SCRIPT="$SCRIPT_DIR/compare_nifti.py"
+COMPARE_SCRIPT="$JULIA_PROJECT/compare_nifti.jl"
 OVERALL_PASS=true
 COMPARE_FLAGS=""
 if [[ "$VERBOSE" == true ]]; then
@@ -356,7 +356,7 @@ for tool in "${TOOL_LIST[@]}"; do
         fi
 
         found_any=true
-        python3 "$COMPARE_SCRIPT" "$rust_file" "$julia_file" \
+        "$JULIA_BIN" --project="$JULIA_PROJECT" "$COMPARE_SCRIPT" "$rust_file" "$julia_file" \
             --tolerance "$TOLERANCE" $COMPARE_FLAGS || OVERALL_PASS=false
     done
 
