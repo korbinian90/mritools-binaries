@@ -197,12 +197,7 @@ end
 # ── JSON output ─────────────────────────────────────────────────────────────
 
 function to_json(results)
-    # Use JSON3 if available, otherwise manual formatting
-    try
-        return JSON3.pretty(results)
-    catch
-        return string(results)
-    end
+    return JSON3.pretty(results)
 end
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -258,7 +253,7 @@ function main()
     opts = parse_cli_args(ARGS)
 
     if length(opts.paths) != 2
-        println(stderr, "Error: Exactly two paths required (files or directories)")
+        println(stderr, "error: exactly two paths required (files or directories)")
         exit(2)
     end
 
