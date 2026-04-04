@@ -66,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --skip-julia)    SKIP_JULIA=true; shift ;;
         --verbose)       VERBOSE=true; shift ;;
         --help|-h)
+            # NOTE: Line range '2,27p' selects the options block; update if help text changes
             sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -329,6 +330,7 @@ if [[ "$SKIP_RUST" == false ]]; then
 fi
 
 if [[ "$SKIP_JULIA" == false ]]; then
+    mkdir -p "$JULIA_OUT"
     echo "────────────────────────────────────────────────────────────"
     echo "Running Julia implementations"
     echo "────────────────────────────────────────────────────────────"
