@@ -258,7 +258,12 @@ fn main() -> Result<()> {
         // Canonical magnitude dumps
         write_step(dir, "mag_combined", &mag_combined, &mag_4d)?;
         write_step(dir, "mag_corrected", &mag_corrected, &mag_4d)?;
-        write_step(dir, "phase_mask", &mask.iter().map(|&b| b as f64).collect::<Vec<_>>(), &mag_4d)?;
+        write_step(
+            dir,
+            "phase_mask",
+            &mask.iter().map(|&b| b as f64).collect::<Vec<_>>(),
+            &mag_4d,
+        )?;
         if let Some(ref s) = sensitivity_map {
             write_step(dir, "sensitivity", s, &mag_4d)?;
         }
