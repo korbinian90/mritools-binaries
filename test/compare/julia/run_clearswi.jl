@@ -55,12 +55,20 @@ function parse_args()
         "--mag-sensitivity-correction"
             help = "Sensitivity correction: on, off"
             default = "on"
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
 function main()
     args = parse_args()
+
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load magnitude
     mag_nii = niread(args["magnitude"])
@@ -141,12 +149,20 @@ function main()
     savenii(swi, output_path; header=mag_nii.header)
     println("  Saved: ", output_path)
 
+    # Canonical intermediate dumps: final SWI and MIP
+    if steps_dir !== nothing
+        savenii(swi, joinpath(steps_dir, "swi.nii"); header=mag_nii.header)
+    end
+
     # MIP
     mip_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_mip.nii"
     if ndims(swi) >= 3
         mip = CLEARSWI.create_mip(swi; slices=args["mip-slices"])
         savenii(mip, mip_path; header=mag_nii.header)
         println("  Saved MIP: ", mip_path)
+        if steps_dir !== nothing
+            savenii(mip, joinpath(steps_dir, "mip.nii"); header=mag_nii.header)
+        end
     end
 
     println("CLEARSWI.jl completed successfully")

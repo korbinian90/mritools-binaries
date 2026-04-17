@@ -253,6 +253,15 @@ fn main() -> Result<()> {
         eprintln!("  saved corrected phases to: {}", out_path);
     }
 
+    // Canonical corrected-phase step (post-bipolar if applied, pre-bipolar otherwise)
+    if let Some(ref dir) = cli.writesteps {
+        write_nifti_4d(
+            &format!("{}/corrected.nii", dir),
+            &corrected_phases,
+            &phase_4d,
+        )?;
+    }
+
     // Write phase offsets if requested
     if cli.write_phase_offsets {
         let po_path = derive_path(&out_path, "phase_offset");

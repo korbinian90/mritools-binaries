@@ -7,11 +7,14 @@
 //!   minimum spanning tree algorithm (ROMEO)." MRM, 85(4):2294-2308.
 //!   https://doi.org/10.1002/mrm.28563
 
+mod algorithms;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d, NiftiData4D,
+    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d,
+    write_nifti_from_4d, NiftiData4D,
 };
 use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
@@ -136,6 +139,11 @@ struct Cli {
     /// Spatially unwrap low-quality voxels after temporal unwrapping (EXPERIMENTAL)
     #[arg(long, num_args = 0..=1, default_value_t = 0.0, default_missing_value = "0.5")]
     temporal_uncertain_unwrapping: f64,
+
+    /// Write canonical intermediate NIfTIs to the given directory (for cross-language comparison).
+    /// See docs/algorithm_provenance.md#canonical-intermediate-niftis.
+    #[arg(long = "writesteps")]
+    writesteps: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -269,6 +277,22 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     save_settings(output_dir, "romeo", &args)?;
 
+    // Prepare writesteps directory if requested
+    let steps_dir = cli.writesteps.as_deref();
+    if let Some(dir) = steps_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+    }
+
+    // Write phase_rescaled step (after rescale, before any further processing)
+    if let Some(dir) = steps_dir {
+        write_nifti_4d(
+            &format!("{}/phase_rescaled.nii", dir),
+            &phase_4d.volumes,
+            &phase_4d,
+        )?;
+    }
+
     let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
         cli.output.clone()
     } else {
@@ -311,6 +335,18 @@ fn main() -> Result<()> {
     } else {
         None
     };
+
+    // Write canonical phase_offset + phase_corrected steps
+    if let Some(dir) = steps_dir {
+        if let Some(ref offset) = phase_offset {
+            write_nifti_from_4d(&format!("{}/phase_offset.nii", dir), offset, &phase_4d)?;
+        }
+        write_nifti_4d(
+            &format!("{}/phase_corrected.nii", dir),
+            &phase_4d.volumes,
+            &phase_4d,
+        )?;
+    }
 
     // Write phase offsets if requested
     if cli.write_phase_offsets {
@@ -369,10 +405,13 @@ fn main() -> Result<()> {
 
         let b0_nii = read_nifti(&cli.phase)?;
         let mut b0_out = b0_nii;
-        b0_out.data = b0_hz;
+        b0_out.data = b0_hz.clone();
         write_nifti(&b0_path, &b0_out)?;
         if cli.verbose {
             eprintln!("  B0 map saved to: {}", b0_path);
+        }
+        if let Some(dir) = steps_dir {
+            write_nifti_from_4d(&format!("{}/b0.nii", dir), &b0_hz, &phase_4d)?;
         }
     }
 
@@ -517,6 +556,30 @@ fn main() -> Result<()> {
         }
     }
 
+    // Write canonical unwrapped steps (per-echo + concatenated 4D)
+    if let Some(dir) = steps_dir {
+        for (i, vol) in unwrapped_volumes.iter().enumerate() {
+            write_nifti_from_4d(
+                &format!("{}/unwrapped_echo_{}.nii", dir, i + 1),
+                vol,
+                &phase_4d,
+            )?;
+        }
+        if n_echoes > 1 {
+            write_nifti_4d(
+                &format!("{}/unwrapped.nii", dir),
+                &unwrapped_volumes,
+                &phase_4d,
+            )?;
+        } else {
+            write_nifti_from_4d(
+                &format!("{}/unwrapped.nii", dir),
+                &unwrapped_volumes[0],
+                &phase_4d,
+            )?;
+        }
+    }
+
     // ---- Write output ----
     if n_echoes == 1 {
         // Single echo: write 3D
@@ -534,8 +597,9 @@ fn main() -> Result<()> {
         eprintln!("  saved to: {}", out_path);
     }
 
-    // Write quality map if requested
-    if cli.write_quality || cli.write_quality_all {
+    // Write quality map if requested (or if writesteps is set — canonical step dumps)
+    let want_quality = cli.write_quality || cli.write_quality_all || steps_dir.is_some();
+    if want_quality {
         // Use first echo for quality
         let mag_data = mag_4d
             .as_ref()
@@ -554,30 +618,40 @@ fn main() -> Result<()> {
             nz,
         );
 
-        if cli.write_quality {
+        if cli.write_quality || steps_dir.is_some() {
             let quality = compute_quality_map(&weights, n_voxels);
-            let mut q_nii = read_nifti(&cli.phase)?;
-            q_nii.data = quality;
-            let q_path = derive_path(&out_path, "quality");
-            write_nifti(&q_path, &q_nii)?;
-            if cli.verbose {
-                eprintln!("  quality map saved to: {}", q_path);
+            if cli.write_quality {
+                let mut q_nii = read_nifti(&cli.phase)?;
+                q_nii.data = quality.clone();
+                let q_path = derive_path(&out_path, "quality");
+                write_nifti(&q_path, &q_nii)?;
+                if cli.verbose {
+                    eprintln!("  quality map saved to: {}", q_path);
+                }
+            }
+            if let Some(dir) = steps_dir {
+                write_nifti_from_4d(&format!("{}/quality.nii", dir), &quality, &phase_4d)?;
             }
         }
 
-        if cli.write_quality_all {
+        if cli.write_quality_all || steps_dir.is_some() {
             let per_dim = weights.len() / 3;
             for (d, name) in [(0, "quality_x"), (1, "quality_y"), (2, "quality_z")] {
                 let mut q_data = vec![0.0f64; n_voxels];
                 for idx in 0..per_dim.min(n_voxels) {
                     q_data[idx] = weights[d * per_dim + idx] as f64 / 255.0;
                 }
-                let mut q_nii = read_nifti(&cli.phase)?;
-                q_nii.data = q_data;
-                let q_path = derive_path(&out_path, name);
-                write_nifti(&q_path, &q_nii)?;
-                if cli.verbose {
-                    eprintln!("  {} saved to: {}", name, q_path);
+                if cli.write_quality_all {
+                    let mut q_nii = read_nifti(&cli.phase)?;
+                    q_nii.data = q_data.clone();
+                    let q_path = derive_path(&out_path, name);
+                    write_nifti(&q_path, &q_nii)?;
+                    if cli.verbose {
+                        eprintln!("  {} saved to: {}", name, q_path);
+                    }
+                }
+                if let Some(dir) = steps_dir {
+                    write_nifti_from_4d(&format!("{}/{}.nii", dir, name), &q_data, &phase_4d)?;
                 }
             }
         }

@@ -85,6 +85,19 @@ makehomogeneous -m magnitude.nii -o homogenous.nii
 romeo_mask -p phase.nii -m magnitude.nii -o mask.nii -f 0.15
 ```
 
+## Documentation
+
+- [`docs/cli_parity.md`](docs/cli_parity.md) — flag-by-flag Rust ↔ Julia CLI
+  parity tables for every binary, with status codes and known
+  behavioural divergences.
+- [`docs/algorithm_provenance.md`](docs/algorithm_provenance.md) — per-binary,
+  per-step mapping from the Julia source to the `qsm-core` function used and
+  the Rust call site, plus the list of algorithms accepted by the CLI but not
+  yet ported (see `crates/<tool>/src/algorithms/` stubs).
+- [`test/compare/README.md`](test/compare/README.md) — how to run the
+  cross-language comparison harness and use intermediate `--writesteps`
+  dumps to drill into divergences.
+
 ## Workspace structure
 
 ```

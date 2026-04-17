@@ -41,6 +41,9 @@ function parse_args()
         "--write-phase-offsets"
             help = "Save estimated phase offsets"
             action = :store_true
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
@@ -48,9 +51,19 @@ end
 function main()
     args = parse_args()
 
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
+
     # Load phase
     phase_nii = niread(args["phase"])
     phase_data = Float64.(phase_nii.raw)
+
+    # Dump input phases before any processing
+    if steps_dir !== nothing
+        savenii(phase_data, joinpath(steps_dir, "input_phases.nii"); header=phase_nii.header)
+    end
 
     # Rescale phase to [-π, π] if not disabled
     if !args["no-rescale"]
@@ -110,6 +123,14 @@ function main()
     mkpath(dirname(abspath(output_path)))
     savenii(combined, output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
+
+    # Canonical corrected-phase step (bipolar-aware, matches Rust side)
+    if steps_dir !== nothing
+        savenii(combined, joinpath(steps_dir, "corrected.nii"); header=phase_nii.header)
+        if args["bipolar"]
+            savenii(combined, joinpath(steps_dir, "corrected_bipolar.nii"); header=phase_nii.header)
+        end
+    end
 
     # Phase offsets
     if args["write-phase-offsets"]

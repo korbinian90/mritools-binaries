@@ -27,12 +27,20 @@ function parse_args()
             help = "Number of boxes for segmentation"
             arg_type = Int
             default = 15
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
 function main()
     args = parse_args()
+
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load magnitude
     mag_nii = niread(args["magnitude"])
@@ -68,6 +76,19 @@ function main()
     mkpath(dirname(abspath(output_path)))
     savenii(result, output_path; header=mag_nii.header)
     println("  Saved: ", output_path)
+
+    # Canonical step dumps
+    if steps_dir !== nothing
+        vol_in = ndims(mag_data) == 4 ? mag_data[:, :, :, 1] : mag_data
+        vol_out = ndims(result) == 4 ? result[:, :, :, 1] : result
+        # Bias field = input / output (Gaussian-smoothed quotient recovers it)
+        bias = similar(vol_in)
+        for i in eachindex(vol_in)
+            bias[i] = abs(vol_out[i]) > 1e-10 ? vol_in[i] / vol_out[i] : 1.0
+        end
+        savenii(bias, joinpath(steps_dir, "bias_field.nii"); header=mag_nii.header)
+        savenii(vol_out, joinpath(steps_dir, "homogeneous.nii"); header=mag_nii.header)
+    end
 
     println("makehomogeneous completed successfully")
 end

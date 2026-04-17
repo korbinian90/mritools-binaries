@@ -47,12 +47,21 @@ function parse_args()
         "--weights", "-w"
             help = "Weight type: romeo, romeo2, romeo3, romeo4, romeo6, bestpath"
             default = "romeo"
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
 function main()
     args = parse_args()
+
+    # Setup writesteps dir
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load phase
     phase_nii = niread(args["phase"])
@@ -74,6 +83,11 @@ function main()
                 phase_data .= (phase_data .- mn) ./ (mx - mn) .* 2π .- π
             end
         end
+    end
+
+    # Canonical step: phase_rescaled (post-rescale, pre-processing)
+    if steps_dir !== nothing
+        savenii(phase_data, joinpath(steps_dir, "phase_rescaled.nii"); header=phase_nii.header)
     end
 
     # Load magnitude
@@ -125,13 +139,33 @@ function main()
     savenii(unwrapped, output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
 
+    # Canonical unwrapped steps
+    if steps_dir !== nothing
+        if ndims(unwrapped) == 4
+            for i in 1:size(unwrapped, 4)
+                savenii(unwrapped[:, :, :, i],
+                        joinpath(steps_dir, "unwrapped_echo_$(i).nii");
+                        header=phase_nii.header)
+            end
+            savenii(unwrapped, joinpath(steps_dir, "unwrapped.nii"); header=phase_nii.header)
+        else
+            savenii(unwrapped, joinpath(steps_dir, "unwrapped_echo_1.nii"); header=phase_nii.header)
+            savenii(unwrapped, joinpath(steps_dir, "unwrapped.nii"); header=phase_nii.header)
+        end
+    end
+
     # B0 computation
     if args["compute-B0"]
         b0_path = joinpath(dirname(abspath(output_path)), "B0.nii")
         if ndims(unwrapped) == 4 && length(TEs) >= 2
-            b0 = calculateB0_unwrapped(unwrapped, TEs)
+            # calculateB0_unwrapped(unwrapped_phase, mag, TEs); use ones if no mag
+            b0_mag = mag_data !== nothing ? mag_data : ones(eltype(unwrapped), size(unwrapped))
+            b0 = calculateB0_unwrapped(unwrapped, b0_mag, TEs)
             savenii(b0, b0_path; header=phase_nii.header)
             println("  Saved B0: ", b0_path)
+            if steps_dir !== nothing
+                savenii(b0, joinpath(steps_dir, "b0.nii"); header=phase_nii.header)
+            end
         else
             println("  Warning: B0 requires multi-echo data, skipping")
         end

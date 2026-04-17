@@ -74,6 +74,11 @@ struct Cli {
     /// Write individual quality map for each ROMEO weight
     #[arg(short = 'Q', long)]
     write_quality_all: bool,
+
+    /// Write canonical intermediate NIfTIs to the given directory.
+    /// See docs/algorithm_provenance.md#canonical-intermediate-niftis.
+    #[arg(long = "writesteps")]
+    writesteps: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -246,8 +251,15 @@ fn main() -> Result<()> {
         format!("{}.nii", cli.output)
     };
 
+    // Setup writesteps directory if requested
+    let steps_dir = cli.writesteps.as_deref();
+    if let Some(dir) = steps_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+    }
+
     let mut out_nii = read_nifti(phase)?;
-    out_nii.data = mask;
+    out_nii.data = mask.clone();
     write_nifti(&out_path, &out_nii)
         .with_context(|| format!("Failed to write output '{}'", out_path))?;
 
@@ -255,31 +267,51 @@ fn main() -> Result<()> {
         eprintln!("  saved to: {}", out_path);
     }
 
-    // Write quality map if requested
-    if cli.write_quality {
-        let mut q_nii = read_nifti(phase)?;
-        q_nii.data = quality.clone();
-        let q_path = derive_path(&out_path, "quality");
-        write_nifti(&q_path, &q_nii)?;
-        if cli.verbose {
-            eprintln!("  quality map saved to: {}", q_path);
+    if let Some(dir) = steps_dir {
+        let mut nii = read_nifti(phase)?;
+        nii.data = mask.clone();
+        write_nifti(&format!("{}/mask.nii", dir), &nii)?;
+    }
+
+    // Write quality map if requested (or if writesteps requested)
+    if cli.write_quality || steps_dir.is_some() {
+        if cli.write_quality {
+            let mut q_nii = read_nifti(phase)?;
+            q_nii.data = quality.clone();
+            let q_path = derive_path(&out_path, "quality");
+            write_nifti(&q_path, &q_nii)?;
+            if cli.verbose {
+                eprintln!("  quality map saved to: {}", q_path);
+            }
+        }
+        if let Some(dir) = steps_dir {
+            let mut q_nii = read_nifti(phase)?;
+            q_nii.data = quality.clone();
+            write_nifti(&format!("{}/quality.nii", dir), &q_nii)?;
         }
     }
 
-    // Write all quality maps if requested
-    if cli.write_quality_all {
+    // Write all quality maps if requested (or writesteps)
+    if cli.write_quality_all || steps_dir.is_some() {
         let per_dim = weights.len() / 3;
         for (d, name) in [(0, "quality_x"), (1, "quality_y"), (2, "quality_z")] {
             let mut q_data = vec![0.0f64; n_voxels];
             for idx in 0..per_dim.min(n_voxels) {
                 q_data[idx] = weights[d * per_dim + idx] as f64 / 255.0;
             }
-            let mut q_nii = read_nifti(phase)?;
-            q_nii.data = q_data;
-            let q_path = derive_path(&out_path, name);
-            write_nifti(&q_path, &q_nii)?;
-            if cli.verbose {
-                eprintln!("  {} saved to: {}", name, q_path);
+            if cli.write_quality_all {
+                let mut q_nii = read_nifti(phase)?;
+                q_nii.data = q_data.clone();
+                let q_path = derive_path(&out_path, name);
+                write_nifti(&q_path, &q_nii)?;
+                if cli.verbose {
+                    eprintln!("  {} saved to: {}", name, q_path);
+                }
+            }
+            if let Some(dir) = steps_dir {
+                let mut q_nii = read_nifti(phase)?;
+                q_nii.data = q_data;
+                write_nifti(&format!("{}/{}.nii", dir, name), &q_nii)?;
             }
         }
     }

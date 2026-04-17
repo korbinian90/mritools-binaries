@@ -6,6 +6,8 @@
 //!   Eckstein, K., et al. (2024). "CLEAR-SWI: Computational Efficient T2* Weighted Imaging."
 //!   Proc. ISMRM.
 
+mod algorithms;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
@@ -188,6 +190,7 @@ fn main() -> Result<()> {
     let mask = robust_mask(&mag_combined);
 
     // Apply magnitude sensitivity correction
+    let mut sensitivity_map: Option<Vec<f64>> = None;
     let mag_corrected: Vec<f64> = match cli.mag_sensitivity_correction.as_str() {
         "off" => mag_combined.clone(),
         "on" => {
@@ -200,6 +203,7 @@ fn main() -> Result<()> {
                     corrected[i] = mag_combined[i];
                 }
             }
+            sensitivity_map = Some(sensitivity);
             corrected
         }
         path => {
@@ -213,7 +217,7 @@ fn main() -> Result<()> {
                     );
                     mag_combined.clone()
                 } else {
-                    let sensitivity = &sens_4d.volumes[0];
+                    let sensitivity = sens_4d.volumes[0].clone();
                     if sensitivity.len() != n_voxels {
                         eprintln!(
                             "WARNING: sensitivity file '{}' has {} voxels, but magnitude image has {}, skipping correction",
@@ -231,6 +235,7 @@ fn main() -> Result<()> {
                                 corrected[i] = mag_combined[i];
                             }
                         }
+                        sensitivity_map = Some(sensitivity);
                         corrected
                     }
                 }
@@ -250,8 +255,13 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
 
-        // Save combined magnitude
-        write_step(dir, "mag_combined", &mag_corrected, &mag_4d)?;
+        // Canonical magnitude dumps
+        write_step(dir, "mag_combined", &mag_combined, &mag_4d)?;
+        write_step(dir, "mag_corrected", &mag_corrected, &mag_4d)?;
+        write_step(dir, "phase_mask", &mask.iter().map(|&b| b as f64).collect::<Vec<_>>(), &mag_4d)?;
+        if let Some(ref s) = sensitivity_map {
+            write_step(dir, "sensitivity", s, &mag_4d)?;
+        }
     }
 
     // Get phase data: QSM path or standard unwrap path
@@ -520,6 +530,14 @@ fn main() -> Result<()> {
         // Unwrap phase using selected algorithm
         let unwrapped = match cli.unwrapping_algorithm.to_lowercase().as_str() {
             "romeo" => unwrap_romeo(&phase_data, &mag_corrected, &mask, nx, ny, nz),
+            "laplacianslice" => {
+                // Stub-only; see crates/clearswi/src/algorithms/laplacianslice.rs.
+                eprintln!(
+                    "WARNING: --unwrapping-algorithm laplacianslice is not yet implemented in \
+                     this Rust port, falling back to 3D laplacian"
+                );
+                laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz)
+            }
             _ => laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz),
         };
 
@@ -616,6 +634,10 @@ fn main() -> Result<()> {
         eprintln!("  saved to: {}", out_path);
     }
 
+    if let Some(dir) = writesteps_dir {
+        write_step(dir, "swi", &swi, &mag_4d)?;
+    }
+
     // Create MIP if requested
     let mip_window: usize = cli.mip_slices.parse().unwrap_or(7);
     if mip_window > 0 && mip_window <= nz {
@@ -624,7 +646,7 @@ fn main() -> Result<()> {
             let nz_mip = nz - mip_window + 1;
             let mip_path = derive_path(&out_path, "mip");
             let mip_nii = NiftiData {
-                data: mip,
+                data: mip.clone(),
                 dims: (nx, ny, nz_mip),
                 voxel_size: mag_4d.voxel_size,
                 affine: mag_4d.affine,
@@ -635,6 +657,18 @@ fn main() -> Result<()> {
                 .with_context(|| format!("Failed to write MIP '{}'", mip_path))?;
             if cli.verbose {
                 eprintln!("  MIP saved to: {}", mip_path);
+            }
+            if let Some(dir) = writesteps_dir {
+                // 3-D NIfTI with reduced z-dim — write directly (write_step expects mag_4d dims)
+                let mip_step_nii = NiftiData {
+                    data: mip,
+                    dims: (nx, ny, nz_mip),
+                    voxel_size: mag_4d.voxel_size,
+                    affine: mag_4d.affine,
+                    scl_slope: 1.0,
+                    scl_inter: 0.0,
+                };
+                write_nifti(&format!("{}/mip.nii", dir), &mip_step_nii)?;
             }
         }
     }

@@ -41,12 +41,20 @@ function parse_args()
         "--write-quality", "-q"
             help = "Write quality map"
             action = :store_true
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
 function main()
     args = parse_args()
+
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load phase
     phase_nii = niread(args["phase"])
@@ -116,9 +124,20 @@ function main()
     savenii(Float64.(mask), output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
 
+    # Canonical intermediate dumps (mask always available; quality only if the
+    # ROMEO.jl version exposes it, otherwise we leave a NotComputed marker)
+    if steps_dir !== nothing
+        savenii(Float64.(mask), joinpath(steps_dir, "mask.nii"); header=phase_nii.header)
+        # Quality requires calling calculateweights explicitly — ROMEO.jl API for
+        # this varies by version, so we write a marker rather than potentially
+        # emitting an incorrect volume.
+        open(joinpath(steps_dir, "quality.NotComputed.txt"), "w") do io
+            write(io, "quality map not surfaced by this Julia runner — see docs/algorithm_provenance.md#romeo_mask\n")
+        end
+    end
+
     # Quality map
     if args["write-quality"]
-        quality_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_quality.nii"
         # Note: Quality map extraction depends on ROMEO.jl API
         println("  Note: Quality map writing depends on ROMEO.jl API version")
     end

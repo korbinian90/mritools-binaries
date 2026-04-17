@@ -72,7 +72,7 @@ The Julia project (`test/compare/julia/Project.toml`) depends on:
 | `--mag` | `Mag.nii` | Magnitude filename in data dir |
 | `--echo-times` | `1 2 3` | Echo times in ms (space-separated) |
 | `--tools` | all | Comma-separated: `romeo,clearswi,mcpc3ds,makehomogeneous,romeo_mask` |
-| `--tolerance` | `1e-6` | Max absolute difference for PASS |
+| `--tolerance` | `1e-4` | Max absolute difference for PASS (Rust↔Julia rarely matches tighter than this because of FFT-backend and f32/f64 differences) |
 | `--rust-bin-dir` | auto | Path to Rust release binaries |
 | `--julia` | `julia` | Julia executable path |
 | `--output-dir` | `/tmp/mritools_compare` | Output directory for both Rust and Julia |
@@ -130,23 +130,46 @@ The data directory should contain at minimum:
 
 ## Investigating Differences
 
-When FAIL is reported, use detailed output to diagnose:
+The harness writes per-tool outputs into two parallel trees
+(`<output_dir>/rust/<tool>/` and `<output_dir>/julia/<tool>/`) and, when both
+sides support `--writesteps`, a `steps/` subdirectory of canonical
+intermediate NIfTIs (see
+[`docs/algorithm_provenance.md#canonical-intermediate-niftis`](../../docs/algorithm_provenance.md#canonical-intermediate-niftis)).
+The compare step walks both the top-level output and the `steps/` subdir.
+
+Recommended debugging loop:
 
 ```bash
-# Verbose comparison with diff distribution
-julia --project=test/compare/julia test/compare/julia/compare_nifti.jl \
-    /tmp/mritools_compare/rust/romeo/unwrapped.nii \
-    /tmp/mritools_compare/julia/romeo/unwrapped.nii \
-    --verbose
+# 1. Run a single tool and dump all canonical intermediates
+./test/compare/run_comparison.sh --tools romeo --verbose --tolerance 1e-4
 
-# JSON output for programmatic analysis
-julia --project=test/compare/julia test/compare/julia/compare_nifti.jl \
-    /tmp/mritools_compare/rust/romeo/unwrapped.nii \
-    /tmp/mritools_compare/julia/romeo/unwrapped.nii \
-    --json
+# 2. When the final output fails, find the first diverging step by
+#    comparing the matching pair under steps/
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl --verbose \
+    /tmp/mritools_compare/rust/romeo/steps/phase_rescaled.nii \
+    /tmp/mritools_compare/julia/romeo/steps/phase_rescaled.nii
 
-# Run a single tool with verbose output for debugging
-./test/compare/run_comparison.sh --tools romeo --verbose --tolerance 0
+# 3. Inspect numerically in a REPL
+julia --project=test/compare/julia -e '
+    using NIfTI
+    a = niread("/tmp/mritools_compare/rust/romeo/steps/phase_corrected.nii")
+    b = niread("/tmp/mritools_compare/julia/romeo/steps/phase_corrected.nii")
+    @show maximum(abs.(Float64.(a.raw) .- Float64.(b.raw)))
+    @show findmax(abs.(Float64.(a.raw) .- Float64.(b.raw)))
+'
+
+# 4. Rerun Rust (and the corresponding Julia runner) alone with --verbose
+#    and a fresh --writesteps dir to iterate quickly
+./target/release/romeo -p test/data/small/Phase.nii -m test/data/small/Mag.nii \
+    -t 1 2 3 --writesteps /tmp/romeo_rust_steps -v -o /tmp/romeo_rust_out.nii
+julia --project=test/compare/julia test/compare/julia/run_romeo.jl \
+    --phase test/data/small/Phase.nii --magnitude test/data/small/Mag.nii \
+    --echo-times 1 2 3 --writesteps /tmp/romeo_julia_steps \
+    --output /tmp/romeo_julia_out.nii
+
+# 5. Ad-hoc compare an arbitrary pair
+julia --project=test/compare/julia test/compare/julia/compare_nifti.jl \
+    --dir /tmp/romeo_rust_steps /tmp/romeo_julia_steps --tolerance 1e-4
 ```
 
 ## Notes
@@ -155,7 +178,10 @@ julia --project=test/compare/julia test/compare/julia/compare_nifti.jl \
 - **Echo times**: The default `1 2 3` matches the test data (3 echoes). Use realistic echo times for real data.
 - **Julia startup**: First Julia run will be slow due to package compilation. Subsequent runs are faster.
 - **Tolerance guidance**:
-  - `0` — Exact bit-for-bit match
-  - `1e-10` — Numerical precision differences only
-  - `1e-6` — Typical for f32/f64 mixed precision
-  - `1e-3` — Algorithmic differences likely present
+  - `0` — Exact bit-for-bit match (not achievable cross-language in general)
+  - `1e-10` — Numerical precision differences only (same language/backend)
+  - `1e-6` — Typical for f32/f64 mixed precision, single backend
+  - `1e-4` — Realistic default for Rust↔Julia; FFT backend and f32/f64
+    mixing usually preclude tighter matching
+  - `1e-3` — Algorithmic differences likely present (inspect `steps/`
+    pairs to locate the diverging step)
