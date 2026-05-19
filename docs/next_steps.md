@@ -76,23 +76,20 @@ b) ~~**TGV-QSM hyperparameters.**~~ — **done.**
    a parity item — the Julia comparison harness can't exercise the
    non-default values.
 
-### 3. Wire the comparison harness into CI
+### 3. ~~Wire the comparison harness into CI~~ — done (informational)
 
-Add an `ubuntu-latest` matrix entry to `.github/workflows/ci.yml`:
+`.github/workflows/ci.yml` now has a `compare-julia` job (ubuntu-only)
+that installs Julia 1.10, instantiates the env, builds the Rust release
+binaries, runs `test/compare/run_comparison.sh --tolerance 1e-4`, and
+uploads the comparison log and per-tool output trees as an artifact
+`mritools-compare-<sha>` (14-day retention).
 
-```yaml
-- name: Install Julia
-  uses: julia-actions/setup-julia@v2
-  with:
-    version: '1.10'
-- name: Instantiate Julia env
-  run: julia --project=test/compare/julia test/compare/julia/setup.jl
-- name: Rust↔Julia comparison
-  run: test/compare/run_comparison.sh --tolerance 1e-4
-```
-
-Gate it on `cargo test` passing so failures are easy to attribute. The small
-dataset finishes in well under 5 min once Julia is cached.
+The job is marked `continue-on-error: true` so it does **not** gate PRs
+today — the small-dataset baseline has documented divergences
+(`docs/algorithm_provenance.md#baseline-small-dataset`). Its role is
+drift detection: when a parity item closes (item 4 below, for example),
+tighten the gate by removing `continue-on-error` and (if needed)
+narrowing the tolerance.
 
 ### 4. Investigate the unwrap / B0 divergence
 
