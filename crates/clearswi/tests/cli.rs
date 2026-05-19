@@ -875,6 +875,92 @@ fn clearswi_qsm_input() {
     assert!(output.exists());
 }
 
+/// Test --tgv-iterations is accepted and changes behaviour.
+/// We run with iterations=2 (cheap) and confirm the binary succeeds.
+#[test]
+fn clearswi_tgv_iterations_accepted() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "--qsm",
+            "--tgv-iterations",
+            "2",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --tgv-iterations 2 failed");
+    assert!(output.exists());
+}
+
+/// Test --b0-direction rejects a zero vector.
+#[test]
+fn clearswi_b0_direction_rejects_zero() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "--qsm",
+            "--tgv-iterations",
+            "2",
+            "--b0-direction",
+            "0",
+            "0",
+            "0",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(
+        !status.success(),
+        "clearswi --b0-direction 0 0 0 should fail"
+    );
+}
+
+/// Test --b0-direction accepts a non-axial vector and runs to completion.
+#[test]
+fn clearswi_b0_direction_off_axis() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let output = tmpdir.path().join("clearswi.nii");
+    let status = clearswi_bin()
+        .args([
+            "-m",
+            &mag_file(),
+            "-p",
+            &phase_file(),
+            "-t",
+            "1:3",
+            "--qsm",
+            "--tgv-iterations",
+            "2",
+            "--b0-direction",
+            "1",
+            "0",
+            "1",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute clearswi");
+    assert!(status.success(), "clearswi --b0-direction 1 0 1 failed");
+    assert!(output.exists());
+}
+
 /// Test --qsm-input rejects multi-volume NIfTI (4D data).
 #[test]
 fn clearswi_qsm_input_rejects_multivolume() {

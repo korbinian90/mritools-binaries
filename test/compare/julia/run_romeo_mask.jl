@@ -41,12 +41,20 @@ function parse_args()
         "--write-quality", "-q"
             help = "Write quality map"
             action = :store_true
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
 function main()
     args = parse_args()
+
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load phase
     phase_nii = niread(args["phase"])
@@ -91,24 +99,19 @@ function main()
     println("  Factor: ", args["factor"])
     println("  Weights: ", args["weights"])
 
-    # Build keyword arguments
-    kwargs = Dict{Symbol,Any}()
+    # Build kwargs for voxelquality / calculateweights
+    quality_kwargs = Dict{Symbol,Any}()
     if mag_data !== nothing
-        kwargs[:mag] = mag_data
+        quality_kwargs[:mag] = mag_data
     end
-    kwargs[:TEs] = TEs
-    kwargs[:threshold] = args["factor"]
-    kwargs[:weights] = Symbol(args["weights"])
+    quality_kwargs[:TEs] = TEs
+    quality_kwargs[:weights] = Symbol(args["weights"])
 
-    # Use first echo for masking (matching Rust behavior)
-    phase_for_mask = if ndims(phase_data) == 4
-        phase_data[:, :, :, 1]
-    else
-        phase_data
-    end
-
-    # Run ROMEO mask generation
-    mask = create_mask(phase_for_mask; kwargs...)
+    # ROMEO.jl + MriResearchTools route: voxelquality → robustmask(qmap; threshold).
+    # `voxelquality` handles 3D/4D phase via dispatch; pass full 4D array so it
+    # uses inter-echo info as ROMEO would.
+    qmap = voxelquality(phase_data; quality_kwargs...)
+    mask = robustmask(qmap; threshold=args["factor"])
 
     # Save output
     output_path = args["output"]
@@ -116,11 +119,22 @@ function main()
     savenii(Float64.(mask), output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
 
-    # Quality map
+    # Canonical intermediate dumps: mask + per-voxel quality map.
+    # `voxelquality` already gave us the combined per-voxel map (the
+    # ROMEO.jl reduction over the directional weights into a single
+    # [0,1] number — see ROMEO.jl/src/voxelquality.jl).
+    if steps_dir !== nothing
+        savenii(Float64.(mask), joinpath(steps_dir, "mask.nii"); header=phase_nii.header)
+        savenii(Float64.(qmap), joinpath(steps_dir, "quality.nii"); header=phase_nii.header)
+    end
+
+    # Mirror the Rust binary: optionally emit the quality map next to
+    # the primary output. (The harness reads it from steps/ above; this
+    # is for direct CLI use.)
     if args["write-quality"]
-        quality_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_quality.nii"
-        # Note: Quality map extraction depends on ROMEO.jl API
-        println("  Note: Quality map writing depends on ROMEO.jl API version")
+        q_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_quality.nii"
+        savenii(Float64.(qmap), q_path; header=phase_nii.header)
+        println("  Saved quality map: ", q_path)
     end
 
     println("romeo_mask completed successfully")

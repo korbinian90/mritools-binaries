@@ -47,12 +47,21 @@ function parse_args()
         "--weights", "-w"
             help = "Weight type: romeo, romeo2, romeo3, romeo4, romeo6, bestpath"
             default = "romeo"
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
 function main()
     args = parse_args()
+
+    # Setup writesteps dir
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load phase
     phase_nii = niread(args["phase"])
@@ -76,6 +85,11 @@ function main()
         end
     end
 
+    # Canonical step: phase_rescaled (post-rescale, pre-processing)
+    if steps_dir !== nothing
+        savenii(phase_data, joinpath(steps_dir, "phase_rescaled.nii"); header=phase_nii.header)
+    end
+
     # Load magnitude
     mag_data = if args["magnitude"] !== nothing
         mag_nii = niread(args["magnitude"])
@@ -91,6 +105,25 @@ function main()
         collect(1.0:size(phase_data, 4))
     end
 
+    # ROMEO.jl's `unwrap!` does NOT apply MCPC-3D-S phase offset correction
+    # itself — only the CompileMRI.jl / RomeoApp CLI wrapper does, which is
+    # what the Rust port mirrors. To match that workflow, apply mcpc3ds
+    # explicitly here when multi-echo + phase_offset_correction != off,
+    # then hand the corrected phase to romeo.
+    poc = args["phase-offset-correction"]
+    bipolar = poc == "bipolar"
+
+    if ndims(phase_data) == 4 && size(phase_data, 4) >= 2 && poc != "off" && mag_data !== nothing
+        # MriResearchTools.mcpc3ds expects (phase, mag) positionally and
+        # returns a PhaseMag struct when both are passed.
+        corrected = mcpc3ds(phase_data, mag_data; TEs=TEs, bipolar_correction=bipolar)
+        phase_data = isa(corrected, MriResearchTools.PhaseMag) ? corrected.phase : corrected
+        println("  applied MCPC-3D-S phase offset correction (bipolar=$bipolar)")
+        if steps_dir !== nothing
+            savenii(phase_data, joinpath(steps_dir, "phase_corrected.nii"); header=phase_nii.header)
+        end
+    end
+
     # Build keyword arguments for ROMEO
     kwargs = Dict{Symbol,Any}()
     if mag_data !== nothing
@@ -104,13 +137,9 @@ function main()
     kwargs[:template] = args["template"]
     kwargs[:weights] = Symbol(args["weights"])
 
-    if args["phase-offset-correction"] == "off"
-        kwargs[:phase_offset_correction] = :off
-    elseif args["phase-offset-correction"] == "bipolar"
-        kwargs[:phase_offset_correction] = :bipolar
-    else
-        kwargs[:phase_offset_correction] = :on
-    end
+    # Pass :off so romeo does not re-apply any internal correction
+    # (the kwarg only feeds into calculateweights downstream anyway).
+    kwargs[:phase_offset_correction] = :off
 
     # Run ROMEO unwrapping
     println("Running ROMEO.jl unwrapping...")
@@ -125,13 +154,44 @@ function main()
     savenii(unwrapped, output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
 
+    # Canonical unwrapped steps
+    if steps_dir !== nothing
+        if ndims(unwrapped) == 4
+            for i in 1:size(unwrapped, 4)
+                savenii(unwrapped[:, :, :, i],
+                        joinpath(steps_dir, "unwrapped_echo_$(i).nii");
+                        header=phase_nii.header)
+            end
+            savenii(unwrapped, joinpath(steps_dir, "unwrapped.nii"); header=phase_nii.header)
+        else
+            savenii(unwrapped, joinpath(steps_dir, "unwrapped_echo_1.nii"); header=phase_nii.header)
+            savenii(unwrapped, joinpath(steps_dir, "unwrapped.nii"); header=phase_nii.header)
+        end
+
+        # Per-voxel quality map (matches romeo's --write-quality / Rust `quality.nii`).
+        # Built from the same calculateweights call ROMEO uses for unwrapping.
+        if ndims(phase_data) == 4 && size(phase_data, 4) >= 2
+            qkwargs = Dict{Symbol,Any}(:TEs => TEs)
+            if mag_data !== nothing
+                qkwargs[:mag] = mag_data
+            end
+            qmap = voxelquality(phase_data; qkwargs...)
+            savenii(Float64.(qmap), joinpath(steps_dir, "quality.nii"); header=phase_nii.header)
+        end
+    end
+
     # B0 computation
     if args["compute-B0"]
         b0_path = joinpath(dirname(abspath(output_path)), "B0.nii")
         if ndims(unwrapped) == 4 && length(TEs) >= 2
-            b0 = calculateB0_unwrapped(unwrapped, TEs)
+            # calculateB0_unwrapped(unwrapped_phase, mag, TEs); use ones if no mag
+            b0_mag = mag_data !== nothing ? mag_data : ones(eltype(unwrapped), size(unwrapped))
+            b0 = calculateB0_unwrapped(unwrapped, b0_mag, TEs)
             savenii(b0, b0_path; header=phase_nii.header)
             println("  Saved B0: ", b0_path)
+            if steps_dir !== nothing
+                savenii(b0, joinpath(steps_dir, "b0.nii"); header=phase_nii.header)
+            end
         else
             println("  Warning: B0 requires multi-echo data, skipping")
         end

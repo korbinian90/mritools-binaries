@@ -25,7 +25,22 @@ function compare_data(data1::AbstractArray, data2::AbstractArray, tolerance::Flo
     n = length(v1)
     n == 0 && return Dict("error" => "Empty data arrays")
 
-    abs_diffs = abs.(v1 .- v2)
+    # Ignore voxels where either side is NaN (Julia marks out-of-mask as
+    # NaN via gaussiansmooth3d's mask handling; Rust leaves them at the
+    # input value). Statistics are over the in-mask intersection.
+    valid = .!isnan.(v1) .& .!isnan.(v2)
+    n_nan_only_in_1 = count(isnan.(v1) .& .!isnan.(v2))
+    n_nan_only_in_2 = count(.!isnan.(v1) .& isnan.(v2))
+    n_valid = count(valid)
+
+    if n_valid == 0
+        return Dict("error" => "No overlapping non-NaN voxels", "pass" => false)
+    end
+
+    vv1 = v1[valid]
+    vv2 = v2[valid]
+
+    abs_diffs = abs.(vv1 .- vv2)
     max_abs_diff = maximum(abs_diffs)
     mean_abs_diff = mean(abs_diffs)
     rmse = sqrt(mean(abs_diffs .^ 2))
@@ -34,15 +49,15 @@ function compare_data(data1::AbstractArray, data2::AbstractArray, tolerance::Flo
     within_tol = count(<=(tolerance), abs_diffs)
 
     # Data range for normalization
-    all_vals = vcat(v1, v2)
+    all_vals = vcat(vv1, vv2)
     data_range = maximum(all_vals) - minimum(all_vals)
     nrmse = data_range > 0 ? rmse / data_range : 0.0
 
     # Pearson correlation
-    corr = if std(v1) > 0 && std(v2) > 0
-        cor(v1, v2)
+    corr = if std(vv1) > 0 && std(vv2) > 0
+        cor(vv1, vv2)
     else
-        std(v1) == 0 && std(v2) == 0 ? 1.0 : 0.0
+        std(vv1) == 0 && std(vv2) == 0 ? 1.0 : 0.0
     end
 
     # Distribution of differences
@@ -53,21 +68,49 @@ function compare_data(data1::AbstractArray, data2::AbstractArray, tolerance::Flo
         diff_distribution[key] = count(<=(t), abs_diffs)
     end
 
-    return Dict(
+    # In-mask subset: also drop voxels where either side is exactly 0.0.
+    # Rust binaries leave out-of-mask voxels at 0 (their original input
+    # value); Julia's NaN-marking only catches the smoothing-affected
+    # subset. Adding "both != 0" removes the (Rust=0, Julia=random-noise)
+    # pairs that otherwise drag the correlation down. Safe for phase,
+    # mask, B0 outputs; for SWI/MIP a true 0 voxel is rare in practice.
+    inmask = valid .& (v1 .!= 0.0) .& (v2 .!= 0.0)
+    n_inmask = count(inmask)
+    inmask_stats = if n_inmask > 0
+        v1im = v1[inmask]
+        v2im = v2[inmask]
+        ad = abs.(v1im .- v2im)
+        corr_im = if std(v1im) > 0 && std(v2im) > 0; cor(v1im, v2im); else 1.0; end
+        Dict(
+            "inmask_n" => n_inmask,
+            "inmask_max_abs_diff" => maximum(ad),
+            "inmask_mean_abs_diff" => mean(ad),
+            "inmask_correlation" => corr_im,
+            "inmask_within_tol_pct" => 100.0 * count(<=(tolerance), ad) / n_inmask,
+        )
+    else
+        Dict("inmask_n" => 0)
+    end
+
+    base = Dict(
         "n_voxels" => n,
+        "n_valid" => n_valid,
+        "n_nan_only_in_1" => n_nan_only_in_1,
+        "n_nan_only_in_2" => n_nan_only_in_2,
         "max_abs_diff" => max_abs_diff,
         "mean_abs_diff" => mean_abs_diff,
         "rmse" => rmse,
         "nrmse" => nrmse,
         "correlation" => corr,
         "exact_match_count" => exact_match,
-        "exact_match_pct" => 100.0 * exact_match / n,
+        "exact_match_pct" => 100.0 * exact_match / n_valid,
         "within_tolerance_count" => within_tol,
-        "within_tolerance_pct" => 100.0 * within_tol / n,
+        "within_tolerance_pct" => 100.0 * within_tol / n_valid,
         "data_range" => data_range,
         "diff_distribution" => diff_distribution,
         "pass" => max_abs_diff <= tolerance,
     )
+    return merge(base, inmask_stats)
 end
 
 function compare_files(file1::String, file2::String, tolerance::Float64)
@@ -136,8 +179,19 @@ function format_result(result::Dict; verbose::Bool=false)
     push!(lines, @sprintf("  Correlation:        %.10f", result["correlation"]))
     push!(lines, @sprintf("  Exact match:        %d/%d (%.2f%%)",
         result["exact_match_count"], result["n_voxels"], result["exact_match_pct"]))
+    n_valid = get(result, "n_valid", result["n_voxels"])
     push!(lines, @sprintf("  Within tolerance:   %d/%d (%.2f%%)",
-        result["within_tolerance_count"], result["n_voxels"], result["within_tolerance_pct"]))
+        result["within_tolerance_count"], n_valid, result["within_tolerance_pct"]))
+    if get(result, "n_nan_only_in_1", 0) > 0 || get(result, "n_nan_only_in_2", 0) > 0
+        push!(lines, @sprintf("  NaN-only voxels:    %d in left, %d in right (excluded from stats)",
+            result["n_nan_only_in_1"], result["n_nan_only_in_2"]))
+    end
+    if get(result, "inmask_n", 0) > 0 && result["inmask_n"] != n_valid
+        push!(lines, @sprintf("  In-mask subset (both ≠ 0): %d voxels", result["inmask_n"]))
+        push!(lines, @sprintf("    max abs diff:  %.6e", result["inmask_max_abs_diff"]))
+        push!(lines, @sprintf("    correlation:   %.6f", result["inmask_correlation"]))
+        push!(lines, @sprintf("    within tol:    %.2f%%", result["inmask_within_tol_pct"]))
+    end
 
     if verbose && haskey(result, "diff_distribution")
         push!(lines, "  Difference distribution:")

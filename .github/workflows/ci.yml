@@ -46,3 +46,64 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  compare-julia:
+    name: Rust↔Julia parity (informational)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Drift detector — runs the harness, captures numbers, uploads the
+    # output tree as an artifact. NOT a gate: today's baseline has
+    # documented divergences (see docs/algorithm_provenance.md
+    # #baseline-small-dataset), so the harness exits non-zero on the
+    # small dataset. The step's role is to surface regressions, not to
+    # block PRs. Tighten when parity items in docs/next_steps.md close.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+
+      - name: Cache cargo registry and build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: Linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: Linux-cargo-
+
+      - name: Cache Julia packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.julia
+          key: julia-1.10-${{ hashFiles('test/compare/julia/Manifest.toml') }}
+          restore-keys: julia-1.10-
+
+      - name: Build (release)
+        run: cargo build --workspace --release
+
+      - name: Instantiate Julia env
+        run: julia --project=test/compare/julia test/compare/julia/setup.jl
+
+      - name: Run Rust↔Julia comparison
+        continue-on-error: true
+        run: |
+          test/compare/run_comparison.sh --tolerance 1e-4 --skip-build \
+              2>&1 | tee /tmp/comparison.log
+
+      - name: Upload comparison output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mritools-compare-${{ github.sha }}
+          path: |
+            /tmp/comparison.log
+            /tmp/mritools_compare/
+          retention-days: 14

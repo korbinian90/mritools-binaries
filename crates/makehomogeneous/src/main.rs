@@ -8,7 +8,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use mritools_common::{read_nifti, read_nifti_4d, save_settings, write_nifti, write_nifti_4d};
+use mritools_common::{
+    read_nifti, read_nifti_4d, save_settings, write_nifti, write_nifti_4d, write_nifti_from_4d,
+};
 
 /// Homogeneity correction for high-field MRI.
 ///
@@ -45,6 +47,11 @@ struct Cli {
     /// Verbose output
     #[arg(short = 'v', long)]
     verbose: bool,
+
+    /// Write canonical intermediate NIfTIs to the given directory.
+    /// See docs/algorithm_provenance.md#canonical-intermediate-niftis.
+    #[arg(long = "writesteps")]
+    writesteps: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -101,6 +108,12 @@ fn main() -> Result<()> {
         format!("{}.nii", cli.output)
     };
 
+    let steps_dir = cli.writesteps.as_deref();
+    if let Some(dir) = steps_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+    }
+
     if n_echoes == 1 {
         // Single echo: process as 3D
         let corrected = qsm_core::utils::makehomogeneous(
@@ -117,6 +130,12 @@ fn main() -> Result<()> {
 
         if cli.verbose {
             eprintln!("  homogeneity correction complete");
+        }
+
+        if let Some(dir) = steps_dir {
+            let bias = compute_bias_field(&mag_4d.volumes[0], &corrected);
+            write_nifti_from_4d(&format!("{}/bias_field.nii", dir), &bias, &mag_4d)?;
+            write_nifti_from_4d(&format!("{}/homogeneous.nii", dir), &corrected, &mag_4d)?;
         }
 
         // Apply datatype conversion
@@ -156,6 +175,17 @@ fn main() -> Result<()> {
             eprintln!("  homogeneity correction complete");
         }
 
+        if let Some(dir) = steps_dir {
+            // Use first echo for canonical bias_field/homogeneous NIfTIs (3-D, to match Julia runner).
+            let bias = compute_bias_field(&mag_4d.volumes[0], &corrected_volumes[0]);
+            write_nifti_from_4d(&format!("{}/bias_field.nii", dir), &bias, &mag_4d)?;
+            write_nifti_from_4d(
+                &format!("{}/homogeneous.nii", dir),
+                &corrected_volumes[0],
+                &mag_4d,
+            )?;
+        }
+
         write_nifti_4d(&out_path, &corrected_volumes, &mag_4d)
             .with_context(|| format!("Failed to write 4D output '{}'", out_path))?;
     }
@@ -165,6 +195,19 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Recover the applied bias field from input/corrected magnitudes.
+///
+/// Only used for the `--writesteps bias_field.nii` dump; `qsm_core::utils::makehomogeneous`
+/// does not return the bias field directly. For small corrected values the ratio is
+/// clamped to 1.0 (no-bias) to keep numerical noise out of the dump.
+fn compute_bias_field(input: &[f64], corrected: &[f64]) -> Vec<f64> {
+    input
+        .iter()
+        .zip(corrected.iter())
+        .map(|(&m, &c)| if c.abs() > 1e-10 { m / c } else { 1.0 })
+        .collect()
 }
 
 /// Apply datatype conversion to output data.

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_echo_times, select_volumes, write_nifti,
+    robust_mask, save_settings, select_echo_times, select_volumes, write_nifti,
 };
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
 use qsm_core::utils::otsu_threshold;
@@ -74,6 +74,11 @@ struct Cli {
     /// Write individual quality map for each ROMEO weight
     #[arg(short = 'Q', long)]
     write_quality_all: bool,
+
+    /// Write canonical intermediate NIfTIs to the given directory.
+    /// See docs/algorithm_provenance.md#canonical-intermediate-niftis.
+    #[arg(long = "writesteps")]
+    writesteps: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -185,7 +190,7 @@ fn main() -> Result<()> {
 
     // Build a simple mask (all ones, or magnitude-based)
     let initial_mask = if !mag_data.is_empty() {
-        robust_mask(&mag_data)
+        robust_mask(&mag_data, nx, ny, nz)
     } else {
         vec![1u8; n_voxels]
     };
@@ -246,8 +251,15 @@ fn main() -> Result<()> {
         format!("{}.nii", cli.output)
     };
 
+    // Setup writesteps directory if requested
+    let steps_dir = cli.writesteps.as_deref();
+    if let Some(dir) = steps_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+    }
+
     let mut out_nii = read_nifti(phase)?;
-    out_nii.data = mask;
+    out_nii.data = mask.clone();
     write_nifti(&out_path, &out_nii)
         .with_context(|| format!("Failed to write output '{}'", out_path))?;
 
@@ -255,31 +267,51 @@ fn main() -> Result<()> {
         eprintln!("  saved to: {}", out_path);
     }
 
-    // Write quality map if requested
-    if cli.write_quality {
-        let mut q_nii = read_nifti(phase)?;
-        q_nii.data = quality.clone();
-        let q_path = derive_path(&out_path, "quality");
-        write_nifti(&q_path, &q_nii)?;
-        if cli.verbose {
-            eprintln!("  quality map saved to: {}", q_path);
+    if let Some(dir) = steps_dir {
+        let mut nii = read_nifti(phase)?;
+        nii.data = mask.clone();
+        write_nifti(&format!("{}/mask.nii", dir), &nii)?;
+    }
+
+    // Write quality map if requested (or if writesteps requested)
+    if cli.write_quality || steps_dir.is_some() {
+        if cli.write_quality {
+            let mut q_nii = read_nifti(phase)?;
+            q_nii.data = quality.clone();
+            let q_path = derive_path(&out_path, "quality");
+            write_nifti(&q_path, &q_nii)?;
+            if cli.verbose {
+                eprintln!("  quality map saved to: {}", q_path);
+            }
+        }
+        if let Some(dir) = steps_dir {
+            let mut q_nii = read_nifti(phase)?;
+            q_nii.data = quality.clone();
+            write_nifti(&format!("{}/quality.nii", dir), &q_nii)?;
         }
     }
 
-    // Write all quality maps if requested
-    if cli.write_quality_all {
+    // Write all quality maps if requested (or writesteps)
+    if cli.write_quality_all || steps_dir.is_some() {
         let per_dim = weights.len() / 3;
         for (d, name) in [(0, "quality_x"), (1, "quality_y"), (2, "quality_z")] {
             let mut q_data = vec![0.0f64; n_voxels];
             for idx in 0..per_dim.min(n_voxels) {
                 q_data[idx] = weights[d * per_dim + idx] as f64 / 255.0;
             }
-            let mut q_nii = read_nifti(phase)?;
-            q_nii.data = q_data;
-            let q_path = derive_path(&out_path, name);
-            write_nifti(&q_path, &q_nii)?;
-            if cli.verbose {
-                eprintln!("  {} saved to: {}", name, q_path);
+            if cli.write_quality_all {
+                let mut q_nii = read_nifti(phase)?;
+                q_nii.data = q_data.clone();
+                let q_path = derive_path(&out_path, name);
+                write_nifti(&q_path, &q_nii)?;
+                if cli.verbose {
+                    eprintln!("  {} saved to: {}", name, q_path);
+                }
+            }
+            if let Some(dir) = steps_dir {
+                let mut q_nii = read_nifti(phase)?;
+                q_nii.data = q_data;
+                write_nifti(&format!("{}/{}.nii", dir, name), &q_nii)?;
             }
         }
     }
@@ -354,18 +386,6 @@ fn rescale_phase(phase: &mut [f64]) {
     for v in phase.iter_mut() {
         *v = (*v - min) / (max - min) * 2.0 * pi - pi;
     }
-}
-
-/// Build a robust magnitude-based binary mask (threshold at 10% of max).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Compute a per-voxel quality map from the edge weights.

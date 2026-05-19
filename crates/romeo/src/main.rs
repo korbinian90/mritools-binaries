@@ -7,11 +7,14 @@
 //!   minimum spanning tree algorithm (ROMEO)." MRM, 85(4):2294-2308.
 //!   https://doi.org/10.1002/mrm.28563
 
+mod algorithms;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d, NiftiData4D,
+    robust_mask, save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d,
+    write_nifti_from_4d, NiftiData4D,
 };
 use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
@@ -136,6 +139,11 @@ struct Cli {
     /// Spatially unwrap low-quality voxels after temporal unwrapping (EXPERIMENTAL)
     #[arg(long, num_args = 0..=1, default_value_t = 0.0, default_missing_value = "0.5")]
     temporal_uncertain_unwrapping: f64,
+
+    /// Write canonical intermediate NIfTIs to the given directory (for cross-language comparison).
+    /// See docs/algorithm_provenance.md#canonical-intermediate-niftis.
+    #[arg(long = "writesteps")]
+    writesteps: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -234,7 +242,9 @@ fn main() -> Result<()> {
     // Build mask
     let mask = build_mask(
         mag_4d.as_ref().map(|m| m.volumes[0].as_slice()),
-        n_voxels,
+        nx,
+        ny,
+        nz,
         &cli.mask,
     );
 
@@ -268,6 +278,22 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     save_settings(output_dir, "romeo", &args)?;
+
+    // Prepare writesteps directory if requested
+    let steps_dir = cli.writesteps.as_deref();
+    if let Some(dir) = steps_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
+    }
+
+    // Write phase_rescaled step (after rescale, before any further processing)
+    if let Some(dir) = steps_dir {
+        write_nifti_4d(
+            &format!("{}/phase_rescaled.nii", dir),
+            &phase_4d.volumes,
+            &phase_4d,
+        )?;
+    }
 
     let out_path = if cli.output.ends_with(".nii.gz") || cli.output.ends_with(".nii") {
         cli.output.clone()
@@ -311,6 +337,18 @@ fn main() -> Result<()> {
     } else {
         None
     };
+
+    // Write canonical phase_offset + phase_corrected steps
+    if let Some(dir) = steps_dir {
+        if let Some(ref offset) = phase_offset {
+            write_nifti_from_4d(&format!("{}/phase_offset.nii", dir), offset, &phase_4d)?;
+        }
+        write_nifti_4d(
+            &format!("{}/phase_corrected.nii", dir),
+            &phase_4d.volumes,
+            &phase_4d,
+        )?;
+    }
 
     // Write phase offsets if requested
     if cli.write_phase_offsets {
@@ -369,10 +407,13 @@ fn main() -> Result<()> {
 
         let b0_nii = read_nifti(&cli.phase)?;
         let mut b0_out = b0_nii;
-        b0_out.data = b0_hz;
+        b0_out.data = b0_hz.clone();
         write_nifti(&b0_path, &b0_out)?;
         if cli.verbose {
             eprintln!("  B0 map saved to: {}", b0_path);
+        }
+        if let Some(dir) = steps_dir {
+            write_nifti_from_4d(&format!("{}/b0.nii", dir), &b0_hz, &phase_4d)?;
         }
     }
 
@@ -441,28 +482,43 @@ fn main() -> Result<()> {
             cli.max_seeds,
         );
 
-        // Unwrap other echoes using temporal propagation from template
+        // Unwrap other echoes using temporal propagation from template.
+        // Matches ROMEO.jl/src/unwrapping.jl line 82-86: the reference for
+        // echo `e` is its NEIGHBOUR toward the template (e+1 if e<template,
+        // e-1 if e>template), NOT the template itself — so the chain
+        // grows out one echo at a time. Using the template directly for
+        // every non-template echo gives the wrong `expected` value as
+        // `te_ratio` gets large and `round((phase-expected)/2π)` can land
+        // on a different integer multiple of 2π.
         unwrapped_volumes = vec![vec![0.0; n_voxels]; n_echoes];
         unwrapped_volumes[template_idx] = template_unwrapped;
 
-        for e in 0..n_echoes {
-            if e == template_idx {
-                continue;
-            }
+        // Order matches Julia: walk down from template-1 to 0, then up
+        // from template+1 to n_echoes-1.
+        let mut echo_order: Vec<usize> = (0..template_idx).rev().collect();
+        echo_order.extend(template_idx + 1..n_echoes);
 
-            let te_ratio = if tes[template_idx].abs() > 1e-10 {
-                tes[e] / tes[template_idx]
+        for e in echo_order {
+            let iref = if e < template_idx { e + 1 } else { e - 1 };
+
+            let te_ratio = if tes[iref].abs() > 1e-10 {
+                tes[e] / tes[iref]
             } else {
                 1.0
             };
 
-            // Estimate unwrapped phase from template
+            // Estimate unwrapped phase from the neighbour echo (already unwrapped
+            // by an earlier iteration thanks to the chain order above).
+            // Use round_ties_even (banker's rounding) to match Julia's default
+            // `round(::Float64)`, which is RoundNearest = half-to-even. Rust's
+            // `f64::round()` rounds half away from zero and would flip 2π wraps
+            // on voxels where `diff / 2π` lands exactly on a half-integer.
             let mut unwrapped = phase_4d.volumes[e].clone();
             for i in 0..n_voxels {
                 if mask[i] > 0 {
-                    let expected = unwrapped_volumes[template_idx][i] * te_ratio;
+                    let expected = unwrapped_volumes[iref][i] * te_ratio;
                     let diff = unwrapped[i] - expected;
-                    let n_wraps = (diff / (2.0 * std::f64::consts::PI)).round();
+                    let n_wraps = (diff / (2.0 * std::f64::consts::PI)).round_ties_even();
                     unwrapped[i] -= n_wraps * 2.0 * std::f64::consts::PI;
                 }
             }
@@ -517,6 +573,30 @@ fn main() -> Result<()> {
         }
     }
 
+    // Write canonical unwrapped steps (per-echo + concatenated 4D)
+    if let Some(dir) = steps_dir {
+        for (i, vol) in unwrapped_volumes.iter().enumerate() {
+            write_nifti_from_4d(
+                &format!("{}/unwrapped_echo_{}.nii", dir, i + 1),
+                vol,
+                &phase_4d,
+            )?;
+        }
+        if n_echoes > 1 {
+            write_nifti_4d(
+                &format!("{}/unwrapped.nii", dir),
+                &unwrapped_volumes,
+                &phase_4d,
+            )?;
+        } else {
+            write_nifti_from_4d(
+                &format!("{}/unwrapped.nii", dir),
+                &unwrapped_volumes[0],
+                &phase_4d,
+            )?;
+        }
+    }
+
     // ---- Write output ----
     if n_echoes == 1 {
         // Single echo: write 3D
@@ -534,8 +614,9 @@ fn main() -> Result<()> {
         eprintln!("  saved to: {}", out_path);
     }
 
-    // Write quality map if requested
-    if cli.write_quality || cli.write_quality_all {
+    // Write quality map if requested (or if writesteps is set — canonical step dumps)
+    let want_quality = cli.write_quality || cli.write_quality_all || steps_dir.is_some();
+    if want_quality {
         // Use first echo for quality
         let mag_data = mag_4d
             .as_ref()
@@ -554,30 +635,40 @@ fn main() -> Result<()> {
             nz,
         );
 
-        if cli.write_quality {
+        if cli.write_quality || steps_dir.is_some() {
             let quality = compute_quality_map(&weights, n_voxels);
-            let mut q_nii = read_nifti(&cli.phase)?;
-            q_nii.data = quality;
-            let q_path = derive_path(&out_path, "quality");
-            write_nifti(&q_path, &q_nii)?;
-            if cli.verbose {
-                eprintln!("  quality map saved to: {}", q_path);
+            if cli.write_quality {
+                let mut q_nii = read_nifti(&cli.phase)?;
+                q_nii.data = quality.clone();
+                let q_path = derive_path(&out_path, "quality");
+                write_nifti(&q_path, &q_nii)?;
+                if cli.verbose {
+                    eprintln!("  quality map saved to: {}", q_path);
+                }
+            }
+            if let Some(dir) = steps_dir {
+                write_nifti_from_4d(&format!("{}/quality.nii", dir), &quality, &phase_4d)?;
             }
         }
 
-        if cli.write_quality_all {
+        if cli.write_quality_all || steps_dir.is_some() {
             let per_dim = weights.len() / 3;
             for (d, name) in [(0, "quality_x"), (1, "quality_y"), (2, "quality_z")] {
                 let mut q_data = vec![0.0f64; n_voxels];
                 for idx in 0..per_dim.min(n_voxels) {
                     q_data[idx] = weights[d * per_dim + idx] as f64 / 255.0;
                 }
-                let mut q_nii = read_nifti(&cli.phase)?;
-                q_nii.data = q_data;
-                let q_path = derive_path(&out_path, name);
-                write_nifti(&q_path, &q_nii)?;
-                if cli.verbose {
-                    eprintln!("  {} saved to: {}", name, q_path);
+                if cli.write_quality_all {
+                    let mut q_nii = read_nifti(&cli.phase)?;
+                    q_nii.data = q_data.clone();
+                    let q_path = derive_path(&out_path, name);
+                    write_nifti(&q_path, &q_nii)?;
+                    if cli.verbose {
+                        eprintln!("  {} saved to: {}", name, q_path);
+                    }
+                }
+                if let Some(dir) = steps_dir {
+                    write_nifti_from_4d(&format!("{}/{}.nii", dir, name), &q_data, &phase_4d)?;
                 }
             }
         }
@@ -725,7 +816,14 @@ fn rescale_phase(phase: &mut [f64]) {
 }
 
 /// Build a binary mask from the mask argument.
-fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec<u8> {
+fn build_mask(
+    mag: Option<&[f64]>,
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    mask_args: &[String],
+) -> Vec<u8> {
+    let n_voxels = nx * ny * nz;
     let mask_type = mask_args
         .first()
         .map(|s| s.as_str())
@@ -734,7 +832,7 @@ fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec
         "nomask" => vec![1u8; n_voxels],
         "robustmask" => {
             if let Some(mag) = mag {
-                robust_mask(mag)
+                robust_mask(mag, nx, ny, nz)
             } else {
                 vec![1u8; n_voxels]
             }
@@ -752,18 +850,6 @@ fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec
             }
         }
     }
-}
-
-/// Build a robust magnitude-based binary mask (Otsu threshold).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Find the seed voxel (highest total weight).

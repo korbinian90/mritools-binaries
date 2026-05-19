@@ -6,11 +6,14 @@
 //!   Eckstein, K., et al. (2024). "CLEAR-SWI: Computational Efficient T2* Weighted Imaging."
 //!   Proc. ISMRM.
 
+mod algorithms;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, save_settings,
-    select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData, NiftiData4D,
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, robust_mask,
+    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData,
+    NiftiData4D,
 };
 use qsm_core::inversion::tgv::{tgv_qsm, TgvParams};
 use qsm_core::region_grow::grow_region_unwrap;
@@ -106,9 +109,55 @@ struct Cli {
     #[arg(long)]
     writesteps: Option<String>,
 
+    /// TGV-QSM: number of primal-dual iterations (only used with --qsm)
+    #[arg(long = "tgv-iterations", default_value_t = 800)]
+    tgv_iterations: usize,
+
+    /// TGV-QSM: first-order regularisation weight α₁ (only used with --qsm)
+    #[arg(long = "tgv-alpha-1", default_value_t = 0.003)]
+    tgv_alpha_1: f32,
+
+    /// TGV-QSM: second-order regularisation weight α₀ (only used with --qsm)
+    #[arg(long = "tgv-alpha-0", default_value_t = 0.002)]
+    tgv_alpha_0: f32,
+
+    /// TGV-QSM: number of mask erosions before inversion (only used with --qsm)
+    #[arg(long = "tgv-erosions", default_value_t = 0)]
+    tgv_erosions: usize,
+
+    /// B0 field direction "x y z" (only used with --qsm) [default: 0 0 1]
+    #[arg(long = "b0-direction", num_args = 1.., default_values = &["0", "0", "1"])]
+    b0_direction: Vec<String>,
+
     /// Verbose output
     #[arg(short = 'v', long)]
     verbose: bool,
+}
+
+/// Parse a 3-vector "x y z" or "[x,y,z]" into a unit-normalised (fx, fy, fz).
+fn parse_b0_direction(args: &[String]) -> Result<(f32, f32, f32)> {
+    let joined = args.join(" ");
+    let cleaned = joined
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .replace(',', " ");
+    let vals: Vec<f32> = cleaned
+        .split_whitespace()
+        .map(|s| s.parse::<f32>())
+        .collect::<Result<_, _>>()
+        .map_err(|e| anyhow::anyhow!("Invalid --b0-direction: {}", e))?;
+    if vals.len() != 3 {
+        anyhow::bail!(
+            "--b0-direction requires exactly 3 values, got {}",
+            vals.len()
+        );
+    }
+    let (x, y, z) = (vals[0], vals[1], vals[2]);
+    let norm = (x * x + y * y + z * z).sqrt();
+    if norm < 1e-10 {
+        anyhow::bail!("--b0-direction must be a non-zero vector");
+    }
+    Ok((x / norm, y / norm, z / norm))
 }
 
 fn main() -> Result<()> {
@@ -185,9 +234,10 @@ fn main() -> Result<()> {
     let mag_combined: Vec<f64> = combine_magnitude(&mag_4d, &cli.mag_combine, &echo_times);
 
     // Build mask from combined magnitude
-    let mask = robust_mask(&mag_combined);
+    let mask = robust_mask(&mag_combined, nx, ny, nz);
 
     // Apply magnitude sensitivity correction
+    let mut sensitivity_map: Option<Vec<f64>> = None;
     let mag_corrected: Vec<f64> = match cli.mag_sensitivity_correction.as_str() {
         "off" => mag_combined.clone(),
         "on" => {
@@ -200,6 +250,7 @@ fn main() -> Result<()> {
                     corrected[i] = mag_combined[i];
                 }
             }
+            sensitivity_map = Some(sensitivity);
             corrected
         }
         path => {
@@ -213,7 +264,7 @@ fn main() -> Result<()> {
                     );
                     mag_combined.clone()
                 } else {
-                    let sensitivity = &sens_4d.volumes[0];
+                    let sensitivity = sens_4d.volumes[0].clone();
                     if sensitivity.len() != n_voxels {
                         eprintln!(
                             "WARNING: sensitivity file '{}' has {} voxels, but magnitude image has {}, skipping correction",
@@ -231,6 +282,7 @@ fn main() -> Result<()> {
                                 corrected[i] = mag_combined[i];
                             }
                         }
+                        sensitivity_map = Some(sensitivity);
                         corrected
                     }
                 }
@@ -250,8 +302,18 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("Cannot create writesteps directory '{}'", dir))?;
 
-        // Save combined magnitude
-        write_step(dir, "mag_combined", &mag_corrected, &mag_4d)?;
+        // Canonical magnitude dumps
+        write_step(dir, "mag_combined", &mag_combined, &mag_4d)?;
+        write_step(dir, "mag_corrected", &mag_corrected, &mag_4d)?;
+        write_step(
+            dir,
+            "phase_mask",
+            &mask.iter().map(|&b| b as f64).collect::<Vec<_>>(),
+            &mag_4d,
+        )?;
+        if let Some(ref s) = sensitivity_map {
+            write_step(dir, "sensitivity", s, &mag_4d)?;
+        }
     }
 
     // Get phase data: QSM path or standard unwrap path
@@ -427,27 +489,33 @@ fn main() -> Result<()> {
         };
 
         let tgv_params = TgvParams {
-            iterations: 800,
-            erosions: 0,
+            iterations: cli.tgv_iterations,
+            erosions: cli.tgv_erosions,
+            alpha1: cli.tgv_alpha_1,
+            alpha0: cli.tgv_alpha_0,
             te: effective_te_s,
             ..TgvParams::default()
         };
 
+        let b0_dir = parse_b0_direction(&cli.b0_direction)?;
+
         if cli.verbose {
             eprintln!(
-                "  TGV-QSM: TE={:.3}ms, α₁={}, α₀={}, {} iterations",
+                "  TGV-QSM: TE={:.3}ms, α₁={}, α₀={}, {} iterations, {} erosions",
                 tgv_params.te * 1000.0,
                 tgv_params.alpha1,
                 tgv_params.alpha0,
                 tgv_params.iterations,
+                tgv_params.erosions,
+            );
+            eprintln!(
+                "  B0 direction: ({:.3}, {:.3}, {:.3})",
+                b0_dir.0, b0_dir.1, b0_dir.2
             );
         }
 
         // Convert phase to f32 for TGV
         let phase_f32: Vec<f32> = phase_for_tgv.iter().map(|&v| v as f32).collect();
-
-        // B0 field direction: assume standard axial acquisition (z-axis)
-        let b0_dir = (0.0_f32, 0.0_f32, 1.0_f32);
         let chi = tgv_qsm(
             &phase_f32,
             &qsm_mask,
@@ -520,6 +588,14 @@ fn main() -> Result<()> {
         // Unwrap phase using selected algorithm
         let unwrapped = match cli.unwrapping_algorithm.to_lowercase().as_str() {
             "romeo" => unwrap_romeo(&phase_data, &mag_corrected, &mask, nx, ny, nz),
+            "laplacianslice" => {
+                // Stub-only; see crates/clearswi/src/algorithms/laplacianslice.rs.
+                eprintln!(
+                    "WARNING: --unwrapping-algorithm laplacianslice is not yet implemented in \
+                     this Rust port, falling back to 3D laplacian"
+                );
+                laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz)
+            }
             _ => laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz),
         };
 
@@ -616,6 +692,10 @@ fn main() -> Result<()> {
         eprintln!("  saved to: {}", out_path);
     }
 
+    if let Some(dir) = writesteps_dir {
+        write_step(dir, "swi", &swi, &mag_4d)?;
+    }
+
     // Create MIP if requested
     let mip_window: usize = cli.mip_slices.parse().unwrap_or(7);
     if mip_window > 0 && mip_window <= nz {
@@ -624,7 +704,7 @@ fn main() -> Result<()> {
             let nz_mip = nz - mip_window + 1;
             let mip_path = derive_path(&out_path, "mip");
             let mip_nii = NiftiData {
-                data: mip,
+                data: mip.clone(),
                 dims: (nx, ny, nz_mip),
                 voxel_size: mag_4d.voxel_size,
                 affine: mag_4d.affine,
@@ -635,6 +715,18 @@ fn main() -> Result<()> {
                 .with_context(|| format!("Failed to write MIP '{}'", mip_path))?;
             if cli.verbose {
                 eprintln!("  MIP saved to: {}", mip_path);
+            }
+            if let Some(dir) = writesteps_dir {
+                // 3-D NIfTI with reduced z-dim — write directly (write_step expects mag_4d dims)
+                let mip_step_nii = NiftiData {
+                    data: mip,
+                    dims: (nx, ny, nz_mip),
+                    voxel_size: mag_4d.voxel_size,
+                    affine: mag_4d.affine,
+                    scl_slope: 1.0,
+                    scl_inter: 0.0,
+                };
+                write_nifti(&format!("{}/mip.nii", dir), &mip_step_nii)?;
             }
         }
     }
@@ -773,18 +865,6 @@ fn rescale_phase(phase: &mut [f64]) {
     for v in phase.iter_mut() {
         *v = (*v - min) / (max - min) * 2.0 * pi - pi;
     }
-}
-
-/// Build a robust magnitude-based binary mask (threshold at 10% of max).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Parse filter size from CLI arguments. Default: [4.0, 4.0, 0.0].

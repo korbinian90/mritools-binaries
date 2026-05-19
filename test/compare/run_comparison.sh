@@ -15,7 +15,9 @@
 #   --echo-times T...    Echo times in ms (default: 1 2 3)
 #   --tools TOOLS        Comma-separated tools to compare (default: all)
 #                        Options: romeo,clearswi,mcpc3ds,makehomogeneous,romeo_mask
-#   --tolerance TOL      Max allowed absolute difference (default: 1e-6)
+#   --tolerance TOL      Max allowed absolute difference (default: 1e-4; tighter
+#                        values rarely match cross-language because of FFT-backend
+#                        and f32/f64 differences — see docs/cli_parity.md)
 #   --rust-bin-dir DIR   Path to Rust binaries (default: auto-detect via cargo)
 #   --julia JULIA        Julia executable (default: julia)
 #   --output-dir DIR     Where to store outputs (default: /tmp/mritools_compare)
@@ -38,7 +40,7 @@ PHASE_FILE="Phase.nii"
 MAG_FILE="Mag.nii"
 ECHO_TIMES="1 2 3"
 TOOLS="romeo,clearswi,mcpc3ds,makehomogeneous,romeo_mask"
-TOLERANCE="1e-6"
+TOLERANCE="1e-4"
 RUST_BIN_DIR=""
 JULIA_BIN="julia"
 OUTPUT_DIR="/tmp/mritools_compare"
@@ -97,10 +99,10 @@ mkdir -p "$RUST_OUT"
 # Rust uses space-separated or Julia range syntax: "1:3" or "1 2 3"
 ECHO_TIMES_ARRAY=($ECHO_TIMES)
 N_ECHOES=${#ECHO_TIMES_ARRAY[@]}
-# Julia scripts take space-separated values
-JULIA_ECHO_ARGS=""
+# Julia scripts use ArgParse nargs='*', so pass one --echo-times with all values
+JULIA_ECHO_ARGS="--echo-times"
 for t in "${ECHO_TIMES_ARRAY[@]}"; do
-    JULIA_ECHO_ARGS="$JULIA_ECHO_ARGS --echo-times $t"
+    JULIA_ECHO_ARGS="$JULIA_ECHO_ARGS $t"
 done
 # Rust CLIs take space-separated values via -t
 RUST_ECHO_ARGS=""
@@ -172,7 +174,8 @@ IFS=',' read -ra TOOL_LIST <<< "$TOOLS"
 run_rust_tool() {
     local tool="$1"
     local out_dir="$RUST_OUT/$tool"
-    mkdir -p "$out_dir"
+    local steps_dir="$out_dir/steps"
+    mkdir -p "$out_dir" "$steps_dir"
 
     echo "  ▶ Rust: $tool"
 
@@ -184,6 +187,7 @@ run_rust_tool() {
                 -t $RUST_ECHO_ARGS \
                 -B "$out_dir/B0.nii" \
                 -o "$out_dir/unwrapped.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Rust tool failed: $tool"
                 return 1
@@ -195,6 +199,7 @@ run_rust_tool() {
                 -p "$PHASE_PATH" \
                 -t $RUST_ECHO_ARGS \
                 -o "$out_dir/clearswi.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Rust tool failed: $tool"
                 return 1
@@ -206,6 +211,7 @@ run_rust_tool() {
                 -m "$MAG_PATH" \
                 -t $RUST_ECHO_ARGS \
                 -o "$out_dir/output" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Rust tool failed: $tool"
                 return 1
@@ -215,6 +221,7 @@ run_rust_tool() {
             if ! "$RUST_BIN_DIR/makehomogeneous" \
                 -m "$MAG_PATH" \
                 -o "$out_dir/homogeneous" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Rust tool failed: $tool"
                 return 1
@@ -226,6 +233,7 @@ run_rust_tool() {
                 -m "$MAG_PATH" \
                 -t $RUST_ECHO_ARGS \
                 -o "$out_dir/mask.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Rust tool failed: $tool"
                 return 1
@@ -246,7 +254,8 @@ run_rust_tool() {
 run_julia_tool() {
     local tool="$1"
     local out_dir="$JULIA_OUT/$tool"
-    mkdir -p "$out_dir"
+    local steps_dir="$out_dir/steps"
+    mkdir -p "$out_dir" "$steps_dir"
 
     echo "  ▶ Julia: $tool"
 
@@ -258,6 +267,7 @@ run_julia_tool() {
                 $JULIA_ECHO_ARGS \
                 --compute-B0 \
                 --output "$out_dir/unwrapped.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Julia tool failed: $tool"
                 return 1
@@ -269,6 +279,7 @@ run_julia_tool() {
                 --phase "$PHASE_PATH" \
                 $JULIA_ECHO_ARGS \
                 --output "$out_dir/clearswi.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Julia tool failed: $tool"
                 return 1
@@ -280,6 +291,7 @@ run_julia_tool() {
                 --magnitude "$MAG_PATH" \
                 $JULIA_ECHO_ARGS \
                 --output "$out_dir/output.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Julia tool failed: $tool"
                 return 1
@@ -289,6 +301,7 @@ run_julia_tool() {
             if ! "$JULIA_BIN" --project="$JULIA_PROJECT" "$JULIA_PROJECT/run_makehomogeneous.jl" \
                 --magnitude "$MAG_PATH" \
                 --output "$out_dir/homogeneous.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Julia tool failed: $tool"
                 return 1
@@ -300,6 +313,7 @@ run_julia_tool() {
                 --magnitude "$MAG_PATH" \
                 $JULIA_ECHO_ARGS \
                 --output "$out_dir/mask.nii" \
+                --writesteps "$steps_dir" \
                 2>&1 | { $VERBOSE && cat || tail -1; }; then
                 echo "    Julia tool failed: $tool"
                 return 1
@@ -378,36 +392,45 @@ for tool in "${TOOL_LIST[@]}"; do
         continue
     fi
 
-    # Find all NIfTI files in rust output and compare with julia
+    # Find all NIfTI files in rust output (and steps/) and compare with julia.
+    # We walk the top-level output dir and, if present, the canonical steps/ dir.
     found_any=false
-    for rust_file in "$rust_dir"/*.nii "$rust_dir"/*.nii.gz; do
-        [[ -f "$rust_file" ]] || continue
-        basename=$(basename "$rust_file")
+    for sub in "" "/steps"; do
+        r_sub="$rust_dir$sub"
+        j_sub="$julia_dir$sub"
+        [[ -d "$r_sub" ]] || continue
 
-        # Skip settings files
-        [[ "$basename" == settings_* ]] && continue
-
-        julia_file="$julia_dir/$basename"
-        if [[ ! -f "$julia_file" ]]; then
-            echo "  MISSING in Julia: $basename"
-            OVERALL_PASS=false
-            continue
+        if [[ -n "$sub" ]]; then
+            echo "  — steps/ (intermediate NIfTIs)"
         fi
 
-        found_any=true
-        "$JULIA_BIN" --project="$JULIA_PROJECT" "$COMPARE_SCRIPT" "$rust_file" "$julia_file" \
-            --tolerance "$TOLERANCE" $COMPARE_FLAGS || OVERALL_PASS=false
-    done
+        for rust_file in "$r_sub"/*.nii "$r_sub"/*.nii.gz; do
+            [[ -f "$rust_file" ]] || continue
+            basename=$(basename "$rust_file")
+            [[ "$basename" == settings_* ]] && continue
 
-    # Check for files only in julia output
-    for julia_file in "$julia_dir"/*.nii "$julia_dir"/*.nii.gz; do
-        [[ -f "$julia_file" ]] || continue
-        basename=$(basename "$julia_file")
-        [[ "$basename" == settings_* ]] && continue
-        rust_file="$rust_dir/$basename"
-        if [[ ! -f "$rust_file" ]]; then
-            echo "  EXTRA in Julia (not in Rust): $basename"
-        fi
+            julia_file="$j_sub/$basename"
+            if [[ ! -f "$julia_file" ]]; then
+                echo "  MISSING in Julia: ${sub:1}${sub:+/}$basename"
+                OVERALL_PASS=false
+                continue
+            fi
+
+            found_any=true
+            "$JULIA_BIN" --project="$JULIA_PROJECT" "$COMPARE_SCRIPT" "$rust_file" "$julia_file" \
+                --tolerance "$TOLERANCE" $COMPARE_FLAGS || OVERALL_PASS=false
+        done
+
+        # Flag files only in Julia (e.g. quality step that Rust doesn't emit)
+        for julia_file in "$j_sub"/*.nii "$j_sub"/*.nii.gz; do
+            [[ -f "$julia_file" ]] || continue
+            basename=$(basename "$julia_file")
+            [[ "$basename" == settings_* ]] && continue
+            rust_file="$r_sub/$basename"
+            if [[ ! -f "$rust_file" ]]; then
+                echo "  EXTRA in Julia (not in Rust): ${sub:1}${sub:+/}$basename"
+            fi
+        done
     done
 
     if [[ "$found_any" == false ]]; then

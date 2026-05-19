@@ -41,6 +41,9 @@ function parse_args()
         "--write-phase-offsets"
             help = "Save estimated phase offsets"
             action = :store_true
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
@@ -48,9 +51,19 @@ end
 function main()
     args = parse_args()
 
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
+
     # Load phase
     phase_nii = niread(args["phase"])
     phase_data = Float64.(phase_nii.raw)
+
+    # Dump input phases before any processing
+    if steps_dir !== nothing
+        savenii(phase_data, joinpath(steps_dir, "input_phases.nii"); header=phase_nii.header)
+    end
 
     # Rescale phase to [-π, π] if not disabled
     if !args["no-rescale"]
@@ -100,7 +113,12 @@ function main()
     end
 
     # Run MCPC-3D-S
-    combined = mcpc3ds(phase_data; mag=mag_data, kwargs...)
+    # MriResearchTools.mcpc3ds expects (phase, mag) positionally; `mag` is not a kwarg.
+    combined = mcpc3ds(phase_data, mag_data; kwargs...)
+
+    # `combined` is a PhaseMag struct when called with (phase, mag); we save only
+    # the corrected phase to match the Rust binary output.
+    combined_phase = isa(combined, MriResearchTools.PhaseMag) ? combined.phase : combined
 
     # Save output
     output_path = args["output"]
@@ -108,8 +126,16 @@ function main()
         output_path *= ".nii"
     end
     mkpath(dirname(abspath(output_path)))
-    savenii(combined, output_path; header=phase_nii.header)
+    savenii(combined_phase, output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
+
+    # Canonical corrected-phase step (bipolar-aware, matches Rust side)
+    if steps_dir !== nothing
+        savenii(combined_phase, joinpath(steps_dir, "corrected.nii"); header=phase_nii.header)
+        if args["bipolar"]
+            savenii(combined_phase, joinpath(steps_dir, "corrected_bipolar.nii"); header=phase_nii.header)
+        end
+    end
 
     # Phase offsets
     if args["write-phase-offsets"]

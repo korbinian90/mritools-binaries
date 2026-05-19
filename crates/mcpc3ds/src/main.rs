@@ -10,8 +10,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_times, read_nifti_4d, save_settings, write_nifti_4d,
-    write_nifti_from_4d,
+    fix_ge_phase_slices, parse_echo_times, read_nifti_4d, robust_mask, save_settings,
+    write_nifti_4d, write_nifti_from_4d,
 };
 use qsm_core::utils::mcpc3ds_single_coil;
 
@@ -178,7 +178,7 @@ fn main() -> Result<()> {
     };
 
     // Build mask from magnitude (use first echo)
-    let mask = robust_mask(&mags[0]);
+    let mask = robust_mask(&mags[0], nx, ny, nz);
 
     // Parse smoothing sigma
     let sigma = parse_sigma(&cli.smoothing_sigma);
@@ -253,6 +253,15 @@ fn main() -> Result<()> {
         eprintln!("  saved corrected phases to: {}", out_path);
     }
 
+    // Canonical corrected-phase step (post-bipolar if applied, pre-bipolar otherwise)
+    if let Some(ref dir) = cli.writesteps {
+        write_nifti_4d(
+            &format!("{}/corrected.nii", dir),
+            &corrected_phases,
+            &phase_4d,
+        )?;
+    }
+
     // Write phase offsets if requested
     if cli.write_phase_offsets {
         let po_path = derive_path(&out_path, "phase_offset");
@@ -325,18 +334,6 @@ fn rescale_phase(phase: &mut [f64]) {
     for v in phase.iter_mut() {
         *v = (*v - min) / (max - min) * 2.0 * pi - pi;
     }
-}
-
-/// Build a robust magnitude-based binary mask (threshold at 10% of max).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Parse smoothing sigma from CLI arguments. Default: [10, 10, 5].

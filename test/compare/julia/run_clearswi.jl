@@ -55,12 +55,37 @@ function parse_args()
         "--mag-sensitivity-correction"
             help = "Sensitivity correction: on, off"
             default = "on"
+        "--qsm"
+            help = "Use TGV QSM for phase weighting"
+            action = :store_true
+        "--qsm-mask"
+            help = "Mask for QSM (NIfTI file)"
+            default = nothing
+        "--writesteps"
+            help = "Directory to write canonical intermediate NIfTIs to"
+            default = nothing
     end
     return ArgParse.parse_args(s)
 end
 
+# Map CLEARSWI.jl's writesteps file names to the Rust canonical step
+# names so test/compare/run_comparison.sh can diff matching pairs.
+const CLEARSWI_STEP_RENAME = Dict(
+    "combined_mag.nii"               => "mag_combined.nii",
+    "sensitivity_corrected_mag.nii"  => "mag_corrected.nii",
+    "sensitivity.nii"                => "sensitivity.nii",
+    "maskforphase.nii"               => "phase_mask.nii",
+    "unwrappedphase.nii"             => "phase_unwrapped.nii",
+    "combinedphase.nii"              => "phase_combined.nii",
+)
+
 function main()
     args = parse_args()
+
+    steps_dir = args["writesteps"]
+    if steps_dir !== nothing
+        mkpath(steps_dir)
+    end
 
     # Load magnitude
     mag_nii = niread(args["magnitude"])
@@ -107,33 +132,35 @@ function main()
     end
     println("  Echo times: ", TEs)
 
-    # Create CLEARSWI options
-    # Map unwrapping algorithm
-    unwrap_alg = if args["unwrapping-algorithm"] == "romeo"
-        :romeo
-    else
-        :laplacian
+    # CLEARSWI.jl public API: calculateSWI(Data, Options).
+    # `Data` carries the NIfTI header so per-step `savenii` calls inside the
+    # package have a header to attach.
+    if phase_data === nothing
+        error("CLEARSWI.jl requires both magnitude and phase inputs")
     end
 
-    # Map phase scaling
-    phase_scaling = Symbol(args["phase-scaling-type"])
-
-    # Build keyword arguments
-    kwargs = Dict{Symbol,Any}()
-    kwargs[:TEs] = TEs
-    kwargs[:unwrapping] = unwrap_alg
-    kwargs[:phase_scaling_type] = phase_scaling
-    kwargs[:phase_scaling_strength] = args["phase-scaling-strength"]
-    kwargs[:filter_size] = args["filter-size"]
-    kwargs[:mag_combine] = Symbol(args["mag-combine"])
-    kwargs[:sensitivity] = args["mag-sensitivity-correction"] == "on"
-
-    # Run CLEARSWI
-    if phase_data !== nothing
-        swi = clearswi(mag_data, phase_data; kwargs...)
+    # Build the QSM mask if --qsm-mask was supplied.
+    qsm_mask = if args["qsm-mask"] !== nothing
+        Bool.(niread(args["qsm-mask"]).raw .!= 0)
     else
-        swi = clearswi(mag_data; kwargs...)
+        nothing
     end
+
+    data = Data(mag_data, phase_data, mag_nii.header, TEs)
+    options = Options(;
+        mag_combine = Symbol(args["mag-combine"]),
+        mag_sens = args["mag-sensitivity-correction"] == "off" ? [1] : nothing,
+        phase_unwrap = Symbol(args["unwrapping-algorithm"]),
+        phase_hp_sigma = args["filter-size"],
+        phase_scaling_type = Symbol(args["phase-scaling-type"]),
+        phase_scaling_strength = args["phase-scaling-strength"],
+        qsm = args["qsm"],
+        qsm_mask = qsm_mask,
+        # CLEARSWI emits its own intermediates under writesteps; we rename
+        # them below to match the Rust canonical basenames.
+        writesteps = steps_dir,
+    )
+    swi = calculateSWI(data, options)
 
     # Save output
     output_path = args["output"]
@@ -141,12 +168,28 @@ function main()
     savenii(swi, output_path; header=mag_nii.header)
     println("  Saved: ", output_path)
 
+    # Canonical intermediate dumps: final SWI and MIP, plus renames of
+    # CLEARSWI.jl's own writesteps output to match the Rust naming.
+    if steps_dir !== nothing
+        savenii(swi, joinpath(steps_dir, "swi.nii"); header=mag_nii.header)
+        for (julia_name, rust_name) in CLEARSWI_STEP_RENAME
+            src = joinpath(steps_dir, julia_name)
+            dst = joinpath(steps_dir, rust_name)
+            if isfile(src) && src != dst
+                mv(src, dst; force=true)
+            end
+        end
+    end
+
     # MIP
     mip_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_mip.nii"
     if ndims(swi) >= 3
-        mip = CLEARSWI.create_mip(swi; slices=args["mip-slices"])
+        mip = createMIP(swi, args["mip-slices"])
         savenii(mip, mip_path; header=mag_nii.header)
         println("  Saved MIP: ", mip_path)
+        if steps_dir !== nothing
+            savenii(mip, joinpath(steps_dir, "mip.nii"); header=mag_nii.header)
+        end
     end
 
     println("CLEARSWI.jl completed successfully")
