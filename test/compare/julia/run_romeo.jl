@@ -105,6 +105,25 @@ function main()
         collect(1.0:size(phase_data, 4))
     end
 
+    # ROMEO.jl's `unwrap!` does NOT apply MCPC-3D-S phase offset correction
+    # itself — only the CompileMRI.jl / RomeoApp CLI wrapper does, which is
+    # what the Rust port mirrors. To match that workflow, apply mcpc3ds
+    # explicitly here when multi-echo + phase_offset_correction != off,
+    # then hand the corrected phase to romeo.
+    poc = args["phase-offset-correction"]
+    bipolar = poc == "bipolar"
+
+    if ndims(phase_data) == 4 && size(phase_data, 4) >= 2 && poc != "off" && mag_data !== nothing
+        # MriResearchTools.mcpc3ds expects (phase, mag) positionally and
+        # returns a PhaseMag struct when both are passed.
+        corrected = mcpc3ds(phase_data, mag_data; TEs=TEs, bipolar_correction=bipolar)
+        phase_data = isa(corrected, MriResearchTools.PhaseMag) ? corrected.phase : corrected
+        println("  applied MCPC-3D-S phase offset correction (bipolar=$bipolar)")
+        if steps_dir !== nothing
+            savenii(phase_data, joinpath(steps_dir, "phase_corrected.nii"); header=phase_nii.header)
+        end
+    end
+
     # Build keyword arguments for ROMEO
     kwargs = Dict{Symbol,Any}()
     if mag_data !== nothing
@@ -118,13 +137,9 @@ function main()
     kwargs[:template] = args["template"]
     kwargs[:weights] = Symbol(args["weights"])
 
-    if args["phase-offset-correction"] == "off"
-        kwargs[:phase_offset_correction] = :off
-    elseif args["phase-offset-correction"] == "bipolar"
-        kwargs[:phase_offset_correction] = :bipolar
-    else
-        kwargs[:phase_offset_correction] = :on
-    end
+    # Pass :off so romeo does not re-apply any internal correction
+    # (the kwarg only feeds into calculateweights downstream anyway).
+    kwargs[:phase_offset_correction] = :off
 
     # Run ROMEO unwrapping
     println("Running ROMEO.jl unwrapping...")

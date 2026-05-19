@@ -91,21 +91,40 @@ drift detection: when a parity item closes (item 4 below, for example),
 tighten the gate by removing `continue-on-error` and (if needed)
 narrowing the tolerance.
 
-### 4. Investigate the unwrap / B0 divergence
+### 4. Investigate the unwrap / B0 divergence — partial
 
-`romeo/main.rs:444-471` (TE-ratio temporal unwrap, marked local-algorithm in
-`docs/algorithm_provenance.md`) is the most likely site. Reproduce by:
+Step 1 done: `run_romeo.jl` was missing the MCPC-3D-S phase offset
+correction. `ROMEO.unwrap!` does NOT apply it internally; only the
+CompileMRI.jl / RomeoApp wrapper does, which the Rust port mirrors.
+After wiring `mcpc3ds(phase, mag; TEs)` into the Julia runner the
+unwrapped-echo-1 bias halved (0.176 → 0.086 rad).
 
-```bash
-test/compare/run_comparison.sh --tools romeo --tolerance 1e-6 --verbose
-julia --project=test/compare/julia test/compare/julia/compare_nifti.jl --verbose \
-    /tmp/mritools_compare/rust/romeo/steps/unwrapped_echo_1.nii \
-    /tmp/mritools_compare/julia/romeo/steps/unwrapped_echo_1.nii
-```
+What's left, in order of size:
 
-The first echo should match closely (no temporal step yet); divergence appears
-on echo 2+ if the TE-ratio implementation differs. Compare against
-`ROMEO.jl/src/unwrapping.jl` directly.
+a) **`qsm_core::utils::mcpc3ds_single_coil` vs `MriResearchTools.mcpc3ds`.**
+   The new `phase_corrected.nii` step compare shows max diff 6.21 rad
+   (~2π wrap) and correlation 0.884. The two implementations are doing
+   MCPC-3D-S differently — most likely in the smoothing filter
+   (Gaussian sigma units, padding, separable vs non-separable) or in
+   how the phase offset is wrapped before subtraction. Concrete next
+   move: dump the `phase_offset` map from both sides, compare; if it
+   already differs by 2π globally the divergence is in the offset
+   calculation, not the application. Sites to read:
+   `qsm_core::utils::multi_echo::mcpc3ds_single_coil` vs
+   `MriResearchTools/src/mcpc3ds.jl::mcpc3ds(image; TEs, ...)`.
+
+b) **Echo-3 2π wraps.** The 6.32 rad max diff on echo 3 is consistent
+   with one 2π wrap difference on a contiguous patch of voxels. Could
+   be either the TE-ratio templating itself
+   (`crates/romeo/src/main.rs:489-511`, the `n_wraps = round(diff/2π)`
+   step) or the region-grow seed/order. ROMEO.jl uses
+   `unwrapvoxel.(w, refvalue)` for the temporal step (line 86 of
+   `unwrapping.jl`) — port that exact one-liner to Rust to rule it
+   out.
+
+c) **Residual 0.086 rad on echoes 1–2.** Sub-π so not a wrap. Likely
+   numerical: f32 vs f64 internal precision, or different summation
+   order in the weight calculation. Lowest priority.
 
 ### 5. Close Julia-runner flag-coverage gaps
 
