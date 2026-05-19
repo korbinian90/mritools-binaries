@@ -101,30 +101,78 @@ unwrapped-echo-1 bias halved (0.176 → 0.086 rad).
 
 What's left, in order of size:
 
-a) **`qsm_core::utils::mcpc3ds_single_coil` vs `MriResearchTools.mcpc3ds`.**
-   The new `phase_corrected.nii` step compare shows max diff 6.21 rad
-   (~2π wrap) and correlation 0.884. The two implementations are doing
-   MCPC-3D-S differently — most likely in the smoothing filter
-   (Gaussian sigma units, padding, separable vs non-separable) or in
-   how the phase offset is wrapped before subtraction. Concrete next
-   move: dump the `phase_offset` map from both sides, compare; if it
-   already differs by 2π globally the divergence is in the offset
-   calculation, not the application. Sites to read:
-   `qsm_core::utils::multi_echo::mcpc3ds_single_coil` vs
-   `MriResearchTools/src/mcpc3ds.jl::mcpc3ds(image; TEs, ...)`.
+a) **`qsm_core::utils::mcpc3ds_single_coil` vs `MriResearchTools.mcpc3ds`
+   — root cause identified, fix lives upstream in qsm-core.**
 
-b) **Echo-3 2π wraps.** The 6.32 rad max diff on echo 3 is consistent
-   with one 2π wrap difference on a contiguous patch of voxels. Could
-   be either the TE-ratio templating itself
-   (`crates/romeo/src/main.rs:489-511`, the `n_wraps = round(diff/2π)`
-   step) or the region-grow seed/order. ROMEO.jl uses
-   `unwrapvoxel.(w, refvalue)` for the temporal step (line 86 of
-   `unwrapping.jl`) — port that exact one-liner to Rust to rule it
-   out.
+   Two concrete implementation differences:
 
-c) **Residual 0.086 rad on echoes 1–2.** Sub-π so not a wrap. Likely
-   numerical: f32 vs f64 internal precision, or different summation
-   order in the weight calculation. Lowest priority.
+   1. **Smoothing kernel.** `qsm_core::utils::gaussian_smooth_3d_phase`
+      applies a truncated true-Gaussian kernel (separable convolution)
+      with mask-aware reweighting. MriResearchTools.gaussiansmooth3d_phase
+      applies 3 passes of a box filter, with box sizes computed to
+      approximate the Gaussian (Wells's method, `getboxsizes` in
+      `smoothing.jl`). These produce subtly different smoothed phase
+      offsets — sub-radian locally, but enough to flip 2π wraps in
+      `wrap_to_pi(phase[e] - phase_offset_smoothed)` for any voxel
+      where that subtraction lands near ±π.
+
+   2. **Seed selection for the HIP unwrap.** Rust's `find_seed_point`
+      picks the centre-of-mass of the input mask. ROMEO.jl's
+      `findseed!` walks a priority queue ordered by ROMEO weight
+      (highest-quality voxel first). On data with regional wrap
+      structure the seeds can be in different connected components,
+      producing different regional 2π offsets in `unwrapped_hip`.
+
+   Per-echo `phase_corrected` diff on `test/data/small`:
+   ```
+   echo 1: max 6.15 rad, mean 0.15, voxels with |d|>π: 239
+   echo 2: max 6.19 rad, mean 0.27, voxels with |d|>π: 2359
+   echo 3: max 6.21 rad, mean 0.26, voxels with |d|>π: 2148
+   ```
+   The 2.2% of voxels with |d|>π are the wrap-boundary set.
+
+   Concrete next move: either offer a box-filter mode on
+   `qsm_core::utils::gaussian_smooth_3d_phase` (cheap — qsm-core
+   already has `gaussian_smooth_3d_boxsizes`; just expose a
+   `gaussian_smooth_3d_phase_boxsizes` variant), or port Julia's
+   `getseedfunction` / `findseed!` priority-queue seed selection
+   into qsm-core. Picking either fix would close items 4a and 4c at
+   once. Both fixes are out of scope for `mritools-binaries`.
+
+b) **Echo-3 2π wraps in `unwrapped_echo_3.nii`** — local fixes
+   applied, residual cause is (a).
+
+   Two issues in `crates/romeo/src/main.rs` were fixed this session:
+
+   1. **Wrong chain reference.** The old code used the *template*
+      echo's unwrapped phase as the reference for *every* non-template
+      echo (`unwrapped_volumes[template_idx][i] * te_ratio` with
+      `te_ratio = tes[e] / tes[template_idx]`). ROMEO.jl propagates
+      one echo at a time: echo `e`'s reference is its neighbour
+      toward the template (`iref = e±1`). For echo 3 with template 1,
+      Rust used ratio 3.0 (against echo 1), Julia uses ratio 1.5
+      (against echo 2). Different ratios → different
+      `round(diff/2π)` outcomes on wrap-boundary voxels.
+
+   2. **Half-tie rounding rule.** Rust's `f64::round()` rounds half
+      away from zero; Julia's default `round(::Float64)` uses
+      `RoundNearest` (half to even). For `diff/(2π)` exactly on a
+      half-integer the two flip one 2π wrap. Switched to
+      `round_ties_even` (stable since Rust 1.77).
+
+   Both fixes are merged. Neither moves the needle on
+   `test/data/small` because the dominant echo-3 divergence is the
+   wrap-boundary set inherited from `phase_corrected` (item a) — the
+   temporal unwrap re-wraps those voxels but `expected` shifts
+   correspondingly, so the integer `round()` lands on the same
+   side and 2π propagates. On data without that mcpc3ds drift the
+   chain + banker's-rounding fixes are net improvements.
+
+c) **Residual 0.086 rad on echoes 1–2** — same source as (a).
+   The smoothing-kernel difference produces a sub-π per-voxel error
+   in `phase_offset_smoothed` that propagates uniformly into each
+   echo's `wrap_to_pi(phase[e] - phase_offset_smoothed)`. Same fix
+   path: box-filter smoothing mode in qsm-core.
 
 ### 5. Close Julia-runner flag-coverage gaps — mostly done
 

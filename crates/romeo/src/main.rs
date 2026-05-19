@@ -482,28 +482,43 @@ fn main() -> Result<()> {
             cli.max_seeds,
         );
 
-        // Unwrap other echoes using temporal propagation from template
+        // Unwrap other echoes using temporal propagation from template.
+        // Matches ROMEO.jl/src/unwrapping.jl line 82-86: the reference for
+        // echo `e` is its NEIGHBOUR toward the template (e+1 if e<template,
+        // e-1 if e>template), NOT the template itself — so the chain
+        // grows out one echo at a time. Using the template directly for
+        // every non-template echo gives the wrong `expected` value as
+        // `te_ratio` gets large and `round((phase-expected)/2π)` can land
+        // on a different integer multiple of 2π.
         unwrapped_volumes = vec![vec![0.0; n_voxels]; n_echoes];
         unwrapped_volumes[template_idx] = template_unwrapped;
 
-        for e in 0..n_echoes {
-            if e == template_idx {
-                continue;
-            }
+        // Order matches Julia: walk down from template-1 to 0, then up
+        // from template+1 to n_echoes-1.
+        let mut echo_order: Vec<usize> = (0..template_idx).rev().collect();
+        echo_order.extend(template_idx + 1..n_echoes);
 
-            let te_ratio = if tes[template_idx].abs() > 1e-10 {
-                tes[e] / tes[template_idx]
+        for e in echo_order {
+            let iref = if e < template_idx { e + 1 } else { e - 1 };
+
+            let te_ratio = if tes[iref].abs() > 1e-10 {
+                tes[e] / tes[iref]
             } else {
                 1.0
             };
 
-            // Estimate unwrapped phase from template
+            // Estimate unwrapped phase from the neighbour echo (already unwrapped
+            // by an earlier iteration thanks to the chain order above).
+            // Use round_ties_even (banker's rounding) to match Julia's default
+            // `round(::Float64)`, which is RoundNearest = half-to-even. Rust's
+            // `f64::round()` rounds half away from zero and would flip 2π wraps
+            // on voxels where `diff / 2π` lands exactly on a half-integer.
             let mut unwrapped = phase_4d.volumes[e].clone();
             for i in 0..n_voxels {
                 if mask[i] > 0 {
-                    let expected = unwrapped_volumes[template_idx][i] * te_ratio;
+                    let expected = unwrapped_volumes[iref][i] * te_ratio;
                     let diff = unwrapped[i] - expected;
-                    let n_wraps = (diff / (2.0 * std::f64::consts::PI)).round();
+                    let n_wraps = (diff / (2.0 * std::f64::consts::PI)).round_ties_even();
                     unwrapped[i] -= n_wraps * 2.0 * std::f64::consts::PI;
                 }
             }
