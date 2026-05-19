@@ -113,7 +113,12 @@ function main()
     end
 
     # Run MCPC-3D-S
-    combined = mcpc3ds(phase_data; mag=mag_data, kwargs...)
+    # MriResearchTools.mcpc3ds expects (phase, mag) positionally; `mag` is not a kwarg.
+    combined = mcpc3ds(phase_data, mag_data; kwargs...)
+
+    # `combined` is a PhaseMag struct when called with (phase, mag); we save only
+    # the corrected phase to match the Rust binary output.
+    combined_phase = isa(combined, MriResearchTools.PhaseMag) ? combined.phase : combined
 
     # Save output
     output_path = args["output"]
@@ -121,14 +126,14 @@ function main()
         output_path *= ".nii"
     end
     mkpath(dirname(abspath(output_path)))
-    savenii(combined, output_path; header=phase_nii.header)
+    savenii(combined_phase, output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
 
     # Canonical corrected-phase step (bipolar-aware, matches Rust side)
     if steps_dir !== nothing
-        savenii(combined, joinpath(steps_dir, "corrected.nii"); header=phase_nii.header)
+        savenii(combined_phase, joinpath(steps_dir, "corrected.nii"); header=phase_nii.header)
         if args["bipolar"]
-            savenii(combined, joinpath(steps_dir, "corrected_bipolar.nii"); header=phase_nii.header)
+            savenii(combined_phase, joinpath(steps_dir, "corrected_bipolar.nii"); header=phase_nii.header)
         end
     end
 

@@ -99,24 +99,19 @@ function main()
     println("  Factor: ", args["factor"])
     println("  Weights: ", args["weights"])
 
-    # Build keyword arguments
-    kwargs = Dict{Symbol,Any}()
+    # Build kwargs for voxelquality / calculateweights
+    quality_kwargs = Dict{Symbol,Any}()
     if mag_data !== nothing
-        kwargs[:mag] = mag_data
+        quality_kwargs[:mag] = mag_data
     end
-    kwargs[:TEs] = TEs
-    kwargs[:threshold] = args["factor"]
-    kwargs[:weights] = Symbol(args["weights"])
+    quality_kwargs[:TEs] = TEs
+    quality_kwargs[:weights] = Symbol(args["weights"])
 
-    # Use first echo for masking (matching Rust behavior)
-    phase_for_mask = if ndims(phase_data) == 4
-        phase_data[:, :, :, 1]
-    else
-        phase_data
-    end
-
-    # Run ROMEO mask generation
-    mask = create_mask(phase_for_mask; kwargs...)
+    # ROMEO.jl + MriResearchTools route: voxelquality → robustmask(qmap; threshold).
+    # `voxelquality` handles 3D/4D phase via dispatch; pass full 4D array so it
+    # uses inter-echo info as ROMEO would.
+    qmap = voxelquality(phase_data; quality_kwargs...)
+    mask = robustmask(qmap; threshold=args["factor"])
 
     # Save output
     output_path = args["output"]

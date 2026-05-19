@@ -115,33 +115,23 @@ function main()
     end
     println("  Echo times: ", TEs)
 
-    # Create CLEARSWI options
-    # Map unwrapping algorithm
-    unwrap_alg = if args["unwrapping-algorithm"] == "romeo"
-        :romeo
-    else
-        :laplacian
+    # CLEARSWI.jl public API: calculateSWI(Data, Options).
+    # `Data` carries the NIfTI header so per-step `savenii` calls inside the
+    # package have a header to attach.
+    if phase_data === nothing
+        error("CLEARSWI.jl requires both magnitude and phase inputs")
     end
 
-    # Map phase scaling
-    phase_scaling = Symbol(args["phase-scaling-type"])
-
-    # Build keyword arguments
-    kwargs = Dict{Symbol,Any}()
-    kwargs[:TEs] = TEs
-    kwargs[:unwrapping] = unwrap_alg
-    kwargs[:phase_scaling_type] = phase_scaling
-    kwargs[:phase_scaling_strength] = args["phase-scaling-strength"]
-    kwargs[:filter_size] = args["filter-size"]
-    kwargs[:mag_combine] = Symbol(args["mag-combine"])
-    kwargs[:sensitivity] = args["mag-sensitivity-correction"] == "on"
-
-    # Run CLEARSWI
-    if phase_data !== nothing
-        swi = clearswi(mag_data, phase_data; kwargs...)
-    else
-        swi = clearswi(mag_data; kwargs...)
-    end
+    data = Data(mag_data, phase_data, mag_nii.header, TEs)
+    options = Options(;
+        mag_combine = Symbol(args["mag-combine"]),
+        mag_sens = args["mag-sensitivity-correction"] == "off" ? [1] : nothing,
+        phase_unwrap = Symbol(args["unwrapping-algorithm"]),
+        phase_hp_sigma = args["filter-size"],
+        phase_scaling_type = Symbol(args["phase-scaling-type"]),
+        phase_scaling_strength = args["phase-scaling-strength"],
+    )
+    swi = calculateSWI(data, options)
 
     # Save output
     output_path = args["output"]
@@ -157,7 +147,7 @@ function main()
     # MIP
     mip_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_mip.nii"
     if ndims(swi) >= 3
-        mip = CLEARSWI.create_mip(swi; slices=args["mip-slices"])
+        mip = createMIP(swi, args["mip-slices"])
         savenii(mip, mip_path; header=mag_nii.header)
         println("  Saved MIP: ", mip_path)
         if steps_dir !== nothing

@@ -1,19 +1,24 @@
 # Next steps — Rust ↔ Julia parity
 
-State at `claude/rust-mri-port-testing-SDk8t` (PR #7, head `eefb9de`):
-- Workspace builds, 121 tests pass, clippy + fmt clean, CI green on all 3 OSes.
+State at `claude/audit-and-test-AMAUN` (head `ca66e3f` + Julia-runner fixes
+on this branch):
+- Workspace builds, **121 tests pass**, clippy + fmt clean, CI green on all 3 OSes.
 - All 5 binaries dump canonical intermediates to `<out>/steps/`.
-- Julia runners under `test/compare/julia/` all support `--writesteps`.
-- `test/compare/julia/Manifest.toml` committed → `julia 1.10.11`, reproducible.
+- Julia runners under `test/compare/julia/` all execute end-to-end against the
+  pinned package versions (CLEARSWI 1.6.1, ROMEO 1.x, MriResearchTools 4.x);
+  on Julia 1.12.6 the Manifest's `1.10.11` resolve warning is harmless for this
+  set of APIs.
 - `docs/cli_parity.md` and `docs/algorithm_provenance.md` are the reference for
   what is implemented, what is `accepted-no-op`, and what is `semantic-diff`.
+- **Parity baseline captured** —
+  see `docs/algorithm_provenance.md#baseline-small-dataset` for the numbers.
 - Five stub algorithms exist under `crates/{romeo,clearswi}/src/algorithms/`
   with `unimplemented!()` bodies and citations — intentionally not ported.
 
 ## Environment sanity check (run first in the Julia container)
 
 ```bash
-julia --version                                    # expect 1.10.x
+julia --version                                    # 1.10.x or 1.12.x both work
 julia --project=test/compare/julia -e 'using ROMEO, CLEARSWI, MriResearchTools, NIfTI; println("ok")'
 cargo test --workspace --release                   # 121 tests, all pass
 test/compare/run_comparison.sh --tolerance 1e-4    # full Rust↔Julia compare
@@ -25,16 +30,21 @@ intermediate using the loop documented in `test/compare/README.md`
 
 ## Recommended order of work
 
-### 1. Establish a Rust↔Julia parity baseline
+### 1. ~~Establish a Rust↔Julia parity baseline~~ — done
 
-Run the full comparison harness on `test/data/small/` and record, per tool, the
-first intermediate that diverges and by how much. Expected from the previous
-session: `phase_rescaled` matches at 1e-4, `unwrapped`/`b0` diverge by ~2π wraps
-(correlation 0.9999). Capture the numbers in a one-shot table — they're the
-baseline every later change is measured against.
+The baseline lives under
+`docs/algorithm_provenance.md#baseline-small-dataset`. Headlines:
 
-Suggested location: append a "Baseline (small dataset)" section to
-`docs/algorithm_provenance.md`.
+- `romeo phase_rescaled` matches at 1e-4 (correlation 1.000000).
+- `romeo unwrapped` and `B0` diverge by ~2π wraps with correlation 0.9999;
+  first echo already has a 0.18-rad bias — so the divergence is not just
+  TE-ratio templating but starts inside the per-echo unwrap path.
+- `clearswi swi` correlation 0.63 (largest divergence, three semantic-diffs
+  layered on top of each other).
+- `mcpc3ds output` correlation 0.991, ~2π offsets on a subset of voxels.
+- `makehomogeneous homogeneous` correlation 0.99991, sub-2% max diff.
+- `romeo_mask mask` 85% binary agreement; correlation 0 by construction
+  (binary vs binary). Otsu port should move this materially above 85%.
 
 ### 2. Close the easy `semantic-diff` items
 
@@ -97,9 +107,18 @@ Each closed flag widens harness reach.
 Priority order based on what the test data exercises:
 - `romeo`: `-k/--mask`, `-q/--write-quality`, `-Q/--write-quality-all` (so
   quality dumps become directly comparable)
-- `clearswi`: `--qsm`, `--qsm-mask` (TGV path is currently Rust-only-tested)
+- `clearswi`: `--qsm`, `--qsm-mask` (TGV path is currently Rust-only-tested),
+  plus a `writesteps` remap layer — CLEARSWI.jl writes
+  `combined_mag.nii`, `sensitivity_corrected_mag.nii`, `unwrappedphase.nii`,
+  `filteredphase.nii`, `maskforphase.nii`, `swimag.nii`, `swiphase.nii`
+  under its own `Options.writesteps`; the harness needs them under the
+  Rust canonical basenames (`mag_combined`, `mag_corrected`,
+  `phase_unwrapped`, `phase_filtered`, `phase_mask`, etc.) to do
+  step-by-step comparison. Today only `swi.nii` and `mip.nii` are written
+  by the runner under matching names.
 - `romeo_mask`: `-q/--write-quality` (Julia runner currently writes a
-  `NotComputed` marker)
+  `NotComputed` marker; ROMEO.jl provides `voxelquality` plus
+  `calculateweights` — emit `quality.nii` and `quality_{x,y,z}.nii` from those).
 
 ### 6. Larger test data
 

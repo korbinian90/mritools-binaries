@@ -46,24 +46,29 @@ function main()
     mag_nii = niread(args["magnitude"])
     mag_data = Float64.(mag_nii.raw)
 
+    # Convert sigma_mm to voxels using the NIfTI pixdim, matching the Rust binary.
+    pixdim = mag_nii.header.pixdim[2:1+min(3, ndims(mag_data))]
+    sigma_vox = collect(args["sigma"] ./ pixdim)
+
     println("Running makehomogeneous via MriResearchTools.jl...")
     println("  Magnitude shape: ", size(mag_data))
-    println("  Sigma: ", args["sigma"])
+    println("  Sigma (mm): ", args["sigma"])
+    println("  Sigma (vox): ", sigma_vox)
     println("  N boxes: ", args["nbox"])
 
     # Process each echo independently (matching Rust behavior)
     if ndims(mag_data) == 4
         result = similar(mag_data)
         for echo in 1:size(mag_data, 4)
-            vol = @view mag_data[:, :, :, echo]
+            vol = mag_data[:, :, :, echo]
             result[:, :, :, echo] = makehomogeneous(vol;
-                sigma_mm=args["sigma"],
+                sigma=sigma_vox,
                 nbox=args["nbox"]
             )
         end
     else
         result = makehomogeneous(mag_data;
-            sigma_mm=args["sigma"],
+            sigma=sigma_vox,
             nbox=args["nbox"]
         )
     end

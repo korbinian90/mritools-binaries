@@ -137,6 +137,55 @@ magnitude supplied, single-echo data, flag not set, etc.).
 
 ---
 
+## Baseline (small dataset)
+
+First end-to-end run of `test/compare/run_comparison.sh --tolerance 1e-4`
+on `test/data/small/` (51×51×41×3 float32, TEs=1 2 3 ms). Captured
+2026-05-19 under Julia 1.12.6 (Manifest was resolved at 1.10.11 but the
+required APIs are unchanged on this set of pinned package versions —
+CLEARSWI 1.6.1, ROMEO 1.x, MriResearchTools 4.x).
+
+| Tool | File | Max abs diff | Correlation | Within 1e-4 | Notes |
+|---|---|---|---|---|---|
+| romeo | `steps/phase_rescaled.nii` | 1.19e-7 | 1.000000 | 100.00% | Matches at f32 epsilon |
+| romeo | `steps/unwrapped_echo_1.nii` | 0.176 | 0.99988 | 0.00% | Sub-radian first-echo offset |
+| romeo | `steps/unwrapped_echo_2.nii` | 0.176 | 0.99997 | 0.00% | Same magnitude as echo 1 |
+| romeo | `steps/unwrapped_echo_3.nii` | 6.430 | 0.99989 | 0.00% | ~2π wraps appear at echo 3 |
+| romeo | `unwrapped.nii` | 6.430 | 0.99992 | 0.00% | Carries the echo-3 wraps |
+| romeo | `B0.nii` | 134.6 rad/s | 0.99993 | 0.00% | Linear in wrapped echo 3 |
+| clearswi | `swi.nii` | 1.291 | 0.6338 | 0.12% | Largest divergence — semantic-diff #1, #2, #4 |
+| clearswi | `mip.nii` | 0.809 | 0.6754 | 0.47% | Propagates from `swi` |
+| mcpc3ds | `steps/input_phases.nii` | 1.5e-3 | 0.999999 | 66.78% | Rust rescales in input dtype, Julia in f64 |
+| mcpc3ds | `output.nii` / `steps/corrected.nii` | 6.282 | 0.9912 | 0.42% | ~2π offset on a subset of voxels |
+| makehomogeneous | `homogeneous.nii` (3D) | 2.0e-2 | 0.99991 | 4.38% | Small numerical, no 2π issues |
+| makehomogeneous | `steps/bias_field.nii` | 0.334 | 0.99905 | 0.00% | Multiplicative scale offset |
+| romeo_mask | `mask.nii` | 1.0 (binary) | 0.0 | 85.06% | 15% of voxels disagree (Otsu vs 10%-of-max — see `cli_parity.md#known-semantic-differences` #1) |
+
+`MISSING in Julia` step files (`mag_combined`, `mag_corrected`,
+`phase_unwrapped`, `phase_filtered`, `phase_mask`, `qsm`,
+`swi_unscaled`, `sensitivity`, `quality{,_x,_y,_z}`, `phase_offset`)
+are step dumps the Rust binaries emit but the Julia runners do not yet
+write under matching basenames — the Julia packages do emit them when
+`Options.writesteps` is set, but with different names (e.g.
+`combined_mag.nii`, `unwrappedphase.nii`); remapping into the canonical
+basenames is tracked under `next_steps.md` item 5 (Julia-runner flag
+coverage).
+
+Three takeaways the next changes should be measured against:
+
+1. **`phase_rescaled` matches at 1e-4** confirms the upstream
+   `rescale_phase` parity is genuine — any port that touches phase
+   should keep this number.
+2. **`unwrapped_echo_3` ~2π divergence with correlation 0.9999** is the
+   wrap-divergence next_steps.md item 4 calls out. echo_1 already has
+   a 0.18-rad bias, so the first divergence is not the TE-ratio
+   templating but something earlier in the per-echo unwrap path.
+3. **`mask.nii` correlation 0.0 with 85% binary agreement** is the
+   Otsu-vs-10%-of-max semantic-diff. The Otsu port (next_steps.md
+   item 2a) should push agreement materially above 85%.
+
+---
+
 ## Stubs
 
 Flags accepted by the Rust CLI but whose algorithm is not yet ported
