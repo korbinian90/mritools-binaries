@@ -97,6 +97,9 @@ romeo_mask -p phase.nii -m magnitude.nii -o mask.nii -f 0.15
 - [`test/compare/README.md`](test/compare/README.md) — how to run the
   cross-language comparison harness and use intermediate `--writesteps`
   dumps to drill into divergences.
+- [`RELEASING.md`](RELEASING.md) — how to cut a release (one command
+  via `scripts/release.sh`, with CI-side verification that
+  `Cargo.toml` and the tag agree).
 
 ## Workspace structure
 

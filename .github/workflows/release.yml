@@ -9,8 +9,46 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify-version:
+    name: Verify Cargo.toml version matches tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare tag to workspace.package.version
+        id: check
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"           # e.g. v0.3.0
+          TAG_VERSION="${TAG#v}"             # 0.3.0
+          # Read the version line under [workspace.package]; the first
+          # `version = "..."` after that header is the source of truth.
+          MANIFEST_VERSION=$(awk '
+            /^\[workspace\.package\]/ {in_block=1; next}
+            /^\[/ {in_block=0}
+            in_block && /^version[[:space:]]*=/ {
+                split($0, a, "\""); print a[2]; exit
+            }' Cargo.toml)
+          if [[ -z "$MANIFEST_VERSION" ]]; then
+            echo "::error::Could not find workspace.package.version in Cargo.toml"
+            exit 1
+          fi
+          if [[ "$TAG_VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "::error::Tag v$TAG_VERSION does not match Cargo.toml version $MANIFEST_VERSION."
+            echo "::error::Bump Cargo.toml and re-tag, or delete the tag and try again."
+            echo "::error::Use scripts/release.sh to keep them in sync automatically."
+            exit 1
+          fi
+          echo "OK: tag $TAG matches workspace.package.version $MANIFEST_VERSION"
+          echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
+
   build-release:
     name: Build release (${{ matrix.target }})
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
