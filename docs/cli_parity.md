@@ -90,11 +90,17 @@ Source: `crates/clearswi/src/main.rs:32-112` · Julia runner:
 | `--no-phase-rescale` / `--no-rescale` | off | `--no-rescale` | — | `--no-phase-rescale` | parity |
 | `--fix-ge-phase` | off | not wired | — | `--fix-ge-phase` | julia-only flag on runner |
 | `--writesteps DIR` | none | not wired today — added by this port | `savesteps=...` (internal) | — | parity planned (see `docs/algorithm_provenance.md#clearswi`) |
+| `--tgv-iterations <N>` | `800` | n/a | `TgvParams.iterations` | not exposed by CLEARSWI.jl | rust-only (TGV knob) |
+| `--tgv-alpha-1 <float>` | `0.003` | n/a | `TgvParams.alpha1` | not exposed by CLEARSWI.jl | rust-only (TGV knob) |
+| `--tgv-alpha-0 <float>` | `0.002` | n/a | `TgvParams.alpha0` | not exposed by CLEARSWI.jl | rust-only (TGV knob) |
+| `--tgv-erosions <N>` | `0` | n/a | `TgvParams.erosions` | not exposed by CLEARSWI.jl | rust-only (TGV knob) |
+| `--b0-direction <x y z>` | `0 0 1` | n/a | `b0_dir` (4th positional to `tgv_qsm`) | not exposed by CLEARSWI.jl | rust-only (TGV knob) |
 | `-v / --verbose` | off | — | — | — | rust-only |
 
-TGV-QSM parameters (α₁, α₀, iterations, erosions, `b0_dir`) are
-hard-coded at `crates/clearswi/src/main.rs:429-462`; the Julia CLI
-exposes these — see `semantic-diff` below.
+TGV-QSM hyperparameters (α₁, α₀, iterations, erosions, `b0_dir`) are
+exposed on the Rust CLI via `--tgv-*` and `--b0-direction`. CLEARSWI.jl
+itself doesn't surface these (they live one layer deeper inside
+MRIQSM.jl), so the Rust port is strictly more configurable on this axis.
 
 ---
 
@@ -180,10 +186,17 @@ fixed in this pass.
    quality-map-based threshold in `romeo_mask` (`romeo_mask/main.rs:233`)
    via `qsm_core::utils::otsu_threshold` — that's a different and
    correct application.
-2. **TGV-QSM parameters hard-coded** — CLEARSWI Rust uses
-   `iterations=800`, `erosions=0`, `b0_dir=(0,0,1)`, default α₀/α₁
-   (`clearswi/main.rs:429-462`). Julia CLEARSWI exposes these on its
-   CLI, enabling other b0 directions and iteration counts.
+2. ~~**TGV-QSM parameters hard-coded**~~ — **resolved.**
+   Exposed on `clearswi` as `--tgv-iterations` (default 800),
+   `--tgv-alpha-1` (default 0.003), `--tgv-alpha-0` (default 0.002),
+   `--tgv-erosions` (default 0), and `--b0-direction` (default `0 0 1`,
+   normalised to unit length). Defaults preserve the previous
+   hard-coded behaviour. Underlying `qsm_core::inversion::tgv::TgvParams`
+   has more knobs (step_size, fieldstrength, tol) not yet surfaced —
+   add them on demand. Note: CLEARSWI.jl itself doesn't expose these
+   either (CLEARSWI's `--qsm` is a boolean and TGV params live in the
+   wrapped MRIQSM.jl); the Rust port is now strictly more configurable
+   than the Julia upstream on this axis.
 3. **TE-ratio temporal unwrap** —
    `crates/romeo/src/main.rs:444-471` implements a local simplification
    of ROMEO.jl's temporal unwrap: each non-template echo is

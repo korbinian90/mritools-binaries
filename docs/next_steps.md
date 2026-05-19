@@ -65,11 +65,16 @@ a) ~~**`robust_mask` Otsu port.**~~ — **done**, with a correction:
    on it — see baseline section in `docs/algorithm_provenance.md`.
    The win shows up on clinical data with a real background.
 
-b) **TGV-QSM hyperparameters.** `crates/clearswi/src/main.rs:429-462`
-   hard-codes `iter=800`, `b0_dir=(0,0,1)`. Expose `--tgv-iterations`,
-   `--tgv-alpha-{0,1}`, `--b0-direction <x y z>` flags; default to the
-   current values to keep behaviour unchanged. CompileMRI.jl exposes
-   equivalents — mirror their names.
+b) ~~**TGV-QSM hyperparameters.**~~ — **done.**
+   `clearswi` now accepts `--tgv-iterations` (default 800),
+   `--tgv-alpha-1` (default 0.003), `--tgv-alpha-0` (default 0.002),
+   `--tgv-erosions` (default 0), and `--b0-direction <x y z>`
+   (default `0 0 1`, normalised on parse). Defaults preserve the
+   previous hard-coded behaviour, so existing pipelines are unaffected.
+   Note: CLEARSWI.jl's CLI doesn't expose these (they live in MRIQSM.jl
+   one layer down), so this is Rust-only configurability rather than
+   a parity item — the Julia comparison harness can't exercise the
+   non-default values.
 
 ### 3. Wire the comparison harness into CI
 

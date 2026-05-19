@@ -68,7 +68,7 @@ driving `CLEARSWI.calculateSWI`.
 | 6c | Phase unwrapping — `laplacianslice` | `CLEARSWI.jl/src/unwrapping.jl` (slice-wise) | — | `clearswi/main.rs:528-532` — **stub**, falls back to 3-D laplacian with a warning | see [Stubs](#clearswi-laplacianslice) |
 | 7 | High-pass phase filter | `CLEARSWI.jl/src/phase.jl` (`high_pass_filter`) | — | `clearswi/main.rs:~420-505` | yes (local 3-D Gaussian) |
 | 8 | Multi-echo QSM weighting | `CLEARSWI.jl/src/qsm.jl` (`calculateSWI` combine step) | — | `clearswi/main.rs:356-391` | **yes — local algorithm** |
-| 9 | TGV-QSM inversion | — (Julia uses MRIQSM/ChiSepNet wrappers) | `qsm_core::inversion::tgv::tgv_qsm` (`TgvParams`) | `clearswi/main.rs:429-462` | no, but **hard-coded 800 iterations, `b0_dir=(0,0,1)`** — semantic-diff |
+| 9 | TGV-QSM inversion | — (Julia uses MRIQSM/ChiSepNet wrappers) | `qsm_core::inversion::tgv::tgv_qsm` (`TgvParams`) | `clearswi/main.rs:429-462` | no; all hyperparameters (`iterations`, `alpha_{0,1}`, `erosions`, `b0_dir`) now CLI-configurable via `--tgv-*` and `--b0-direction`. |
 | 10 | SWI combine (phase-weighted magnitude + softplus scaling) | `CLEARSWI.jl/src/swi.jl` (`calculateSWI`) | `qsm_core::swi::{calculate_swi, softplus_scaling, PhaseScaling}` | `clearswi/main.rs:569-601` | no |
 | 11 | MIP | `CLEARSWI.jl/src/mip.jl` (`mip`) | `qsm_core::swi::create_mip` | `clearswi/main.rs:640-655` | no |
 | 12 | NIfTI write-out (+ `--writesteps`) | `NIfTI.jl` | `qsm_core::nifti_io` | `clearswi/main.rs:622-655` and many `write_step` calls | no |

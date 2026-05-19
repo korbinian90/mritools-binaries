@@ -109,9 +109,55 @@ struct Cli {
     #[arg(long)]
     writesteps: Option<String>,
 
+    /// TGV-QSM: number of primal-dual iterations (only used with --qsm)
+    #[arg(long = "tgv-iterations", default_value_t = 800)]
+    tgv_iterations: usize,
+
+    /// TGV-QSM: first-order regularisation weight α₁ (only used with --qsm)
+    #[arg(long = "tgv-alpha-1", default_value_t = 0.003)]
+    tgv_alpha_1: f32,
+
+    /// TGV-QSM: second-order regularisation weight α₀ (only used with --qsm)
+    #[arg(long = "tgv-alpha-0", default_value_t = 0.002)]
+    tgv_alpha_0: f32,
+
+    /// TGV-QSM: number of mask erosions before inversion (only used with --qsm)
+    #[arg(long = "tgv-erosions", default_value_t = 0)]
+    tgv_erosions: usize,
+
+    /// B0 field direction "x y z" (only used with --qsm) [default: 0 0 1]
+    #[arg(long = "b0-direction", num_args = 1.., default_values = &["0", "0", "1"])]
+    b0_direction: Vec<String>,
+
     /// Verbose output
     #[arg(short = 'v', long)]
     verbose: bool,
+}
+
+/// Parse a 3-vector "x y z" or "[x,y,z]" into a unit-normalised (fx, fy, fz).
+fn parse_b0_direction(args: &[String]) -> Result<(f32, f32, f32)> {
+    let joined = args.join(" ");
+    let cleaned = joined
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .replace(',', " ");
+    let vals: Vec<f32> = cleaned
+        .split_whitespace()
+        .map(|s| s.parse::<f32>())
+        .collect::<Result<_, _>>()
+        .map_err(|e| anyhow::anyhow!("Invalid --b0-direction: {}", e))?;
+    if vals.len() != 3 {
+        anyhow::bail!(
+            "--b0-direction requires exactly 3 values, got {}",
+            vals.len()
+        );
+    }
+    let (x, y, z) = (vals[0], vals[1], vals[2]);
+    let norm = (x * x + y * y + z * z).sqrt();
+    if norm < 1e-10 {
+        anyhow::bail!("--b0-direction must be a non-zero vector");
+    }
+    Ok((x / norm, y / norm, z / norm))
 }
 
 fn main() -> Result<()> {
@@ -443,27 +489,33 @@ fn main() -> Result<()> {
         };
 
         let tgv_params = TgvParams {
-            iterations: 800,
-            erosions: 0,
+            iterations: cli.tgv_iterations,
+            erosions: cli.tgv_erosions,
+            alpha1: cli.tgv_alpha_1,
+            alpha0: cli.tgv_alpha_0,
             te: effective_te_s,
             ..TgvParams::default()
         };
 
+        let b0_dir = parse_b0_direction(&cli.b0_direction)?;
+
         if cli.verbose {
             eprintln!(
-                "  TGV-QSM: TE={:.3}ms, α₁={}, α₀={}, {} iterations",
+                "  TGV-QSM: TE={:.3}ms, α₁={}, α₀={}, {} iterations, {} erosions",
                 tgv_params.te * 1000.0,
                 tgv_params.alpha1,
                 tgv_params.alpha0,
                 tgv_params.iterations,
+                tgv_params.erosions,
+            );
+            eprintln!(
+                "  B0 direction: ({:.3}, {:.3}, {:.3})",
+                b0_dir.0, b0_dir.1, b0_dir.2
             );
         }
 
         // Convert phase to f32 for TGV
         let phase_f32: Vec<f32> = phase_for_tgv.iter().map(|&v| v as f32).collect();
-
-        // B0 field direction: assume standard axial acquisition (z-axis)
-        let b0_dir = (0.0_f32, 0.0_f32, 1.0_f32);
         let chi = tgv_qsm(
             &phase_f32,
             &qsm_mask,
