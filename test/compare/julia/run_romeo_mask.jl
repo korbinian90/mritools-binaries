@@ -119,22 +119,22 @@ function main()
     savenii(Float64.(mask), output_path; header=phase_nii.header)
     println("  Saved: ", output_path)
 
-    # Canonical intermediate dumps (mask always available; quality only if the
-    # ROMEO.jl version exposes it, otherwise we leave a NotComputed marker)
+    # Canonical intermediate dumps: mask + per-voxel quality map.
+    # `voxelquality` already gave us the combined per-voxel map (the
+    # ROMEO.jl reduction over the directional weights into a single
+    # [0,1] number — see ROMEO.jl/src/voxelquality.jl).
     if steps_dir !== nothing
         savenii(Float64.(mask), joinpath(steps_dir, "mask.nii"); header=phase_nii.header)
-        # Quality requires calling calculateweights explicitly — ROMEO.jl API for
-        # this varies by version, so we write a marker rather than potentially
-        # emitting an incorrect volume.
-        open(joinpath(steps_dir, "quality.NotComputed.txt"), "w") do io
-            write(io, "quality map not surfaced by this Julia runner — see docs/algorithm_provenance.md#romeo_mask\n")
-        end
+        savenii(Float64.(qmap), joinpath(steps_dir, "quality.nii"); header=phase_nii.header)
     end
 
-    # Quality map
+    # Mirror the Rust binary: optionally emit the quality map next to
+    # the primary output. (The harness reads it from steps/ above; this
+    # is for direct CLI use.)
     if args["write-quality"]
-        # Note: Quality map extraction depends on ROMEO.jl API
-        println("  Note: Quality map writing depends on ROMEO.jl API version")
+        q_path = replace(output_path, r"\.nii(\.gz)?$" => "") * "_quality.nii"
+        savenii(Float64.(qmap), q_path; header=phase_nii.header)
+        println("  Saved quality map: ", q_path)
     end
 
     println("romeo_mask completed successfully")

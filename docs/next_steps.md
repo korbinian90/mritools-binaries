@@ -126,28 +126,40 @@ c) **Residual 0.086 rad on echoes 1–2.** Sub-π so not a wrap. Likely
    numerical: f32 vs f64 internal precision, or different summation
    order in the weight calculation. Lowest priority.
 
-### 5. Close Julia-runner flag-coverage gaps
+### 5. Close Julia-runner flag-coverage gaps — mostly done
 
-`docs/cli_parity.md` lists every flag where the Julia runner doesn't yet wire
-the CompileMRI.jl option (column "Julia runner flag" reads "not wired").
-Mechanical work — add the flag to `run_*.jl` and forward to the Julia function.
-Each closed flag widens harness reach.
+What was wired this session:
+- `clearswi`: `--qsm` (`Options.qsm = true`), `--qsm-mask`
+  (`Options.qsm_mask` parsed from a NIfTI file), plus a writesteps
+  rename layer that maps CLEARSWI.jl's `combined_mag`,
+  `sensitivity_corrected_mag`, `maskforphase`, `unwrappedphase`,
+  `combinedphase` to the Rust canonical names (`mag_combined`,
+  `mag_corrected`, `phase_mask`, `phase_unwrapped`, `phase_combined`).
+  `swimag`, `swiphase`, and `filteredphase` stay under the Julia
+  names — they don't have direct Rust counterparts.
+- `romeo`: `quality.nii` step dump derived from
+  `MriResearchTools.voxelquality(phase; mag, TEs)`. Compares directly
+  against the Rust `quality.nii`.
+- `romeo_mask`: `quality.nii` step dump replaces the `NotComputed`
+  marker. `--write-quality` writes `<output>_quality.nii` next to the
+  primary mask.
 
-Priority order based on what the test data exercises:
-- `romeo`: `-k/--mask`, `-q/--write-quality`, `-Q/--write-quality-all` (so
-  quality dumps become directly comparable)
-- `clearswi`: `--qsm`, `--qsm-mask` (TGV path is currently Rust-only-tested),
-  plus a `writesteps` remap layer — CLEARSWI.jl writes
-  `combined_mag.nii`, `sensitivity_corrected_mag.nii`, `unwrappedphase.nii`,
-  `filteredphase.nii`, `maskforphase.nii`, `swimag.nii`, `swiphase.nii`
-  under its own `Options.writesteps`; the harness needs them under the
-  Rust canonical basenames (`mag_combined`, `mag_corrected`,
-  `phase_unwrapped`, `phase_filtered`, `phase_mask`, etc.) to do
-  step-by-step comparison. Today only `swi.nii` and `mip.nii` are written
-  by the runner under matching names.
-- `romeo_mask`: `-q/--write-quality` (Julia runner currently writes a
-  `NotComputed` marker; ROMEO.jl provides `voxelquality` plus
-  `calculateweights` — emit `quality.nii` and `quality_{x,y,z}.nii` from those).
+What's still on the table (lower-impact, mechanical):
+- `romeo`: `-k/--mask` (so `qualitymask <threshold>` and
+  `<file>.nii` masks can be compared), `-Q/--write-quality-all`
+  (CLEARSWI.jl-style per-direction quality maps — would need to
+  call `calculateweights` directly and dump three volumes).
+- `clearswi`: `--qsm-input` (pre-computed χ map bypassing the
+  TGV step — currently the Rust path only, easy to add to Julia
+  via `Options.qsm = false` and a side-load).
+
+What is **not** worth wiring:
+- `clearswi/steps/phase_rescaled.nii` — CLEARSWI.jl doesn't dump an
+  equivalent step; the rescale is folded into `unwrappedphase`.
+- `mcpc3ds/steps/phase_offset.nii` — `MriResearchTools.mcpc3ds`
+  doesn't return the offset map separately.
+- `romeo/steps/quality_{x,y,z}.nii` — `voxelquality` already
+  reduces the three directional weights into a single map.
 
 ### 6. Larger test data
 

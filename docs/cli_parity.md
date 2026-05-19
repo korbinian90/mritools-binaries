@@ -76,9 +76,9 @@ Source: `crates/clearswi/src/main.rs:32-112` · Julia runner:
 | `-o / --output` | `clearswi.nii` | `--output / -o` | — | `-o` | parity |
 | `-t / --echo-times` | none | `--echo-times / -t` | `Data.TEs` | `-t` | parity |
 | `-s / --mip-slices <N>` | `7` | `--mip-slices / -s` | `createMIP(..., N)` | `-s` | parity |
-| `--qsm` | off | not wired | `Options.phase.scaling.type = :qsm` | `--qsm` | julia-only flag on runner; Rust uses `qsm_core::inversion::tgv::tgv_qsm` |
+| `--qsm` | off | `--qsm` | `Options.qsm = true` | `--qsm` | parity (Rust uses `qsm_core::inversion::tgv::tgv_qsm`, Julia delegates to MRIQSM.jl internally) |
 | `--qsm-input FILE` | none | not wired | pre-computed chi map | `--qsm-input` | julia-only flag on runner |
-| `--qsm-mask FILE` | none | not wired | mask for TGV | `--qsm-mask` | julia-only flag on runner |
+| `--qsm-mask FILE` | none | `--qsm-mask` | `Options.qsm_mask` | `--qsm-mask` | parity |
 | `--mag-combine <SNR\|average\|echo N\|SE TE>` | `SNR` | `--mag-combine` | `Options.mag.combine_echoes` | `--mag-combine` | parity (only SNR/average wired in Julia runner today) |
 | `--mag-sensitivity-correction <on\|off\|FILE>` | `on` | `--mag-sensitivity-correction` | `Options.mag.correct_sensitivity` | `--mag-sensitivity-correction` | parity |
 | `--mag-softplus-scaling <on\|off>` | `on` | not wired | `Options.mag.softplus` | `--mag-softplus-scaling` | julia-only flag on runner |
@@ -159,7 +159,7 @@ Source: `crates/romeo_mask/src/main.rs:23-77` · Julia runner:
 | `-w / --weights <romeo\|…>` | `romeo` | `--weights / -w` | — | `-w` | parity |
 | `--no-phase-rescale` / `--no-rescale` | off | `--no-rescale` | — | `--no-phase-rescale` | parity |
 | `--fix-ge-phase` | off | not wired | — | `--fix-ge-phase` | julia-only flag on runner |
-| `-q / --write-quality` | off | `--write-quality / -q` (API-dependent) | — | `-q` | semantic-diff (Julia runner currently no-op) |
+| `-q / --write-quality` | off | `--write-quality / -q` | `ROMEO.voxelquality` reduces directional weights → single per-voxel map | `-q` | semantic-diff #6 (Rust averages, Julia products) |
 | `-Q / --write-quality-all` | off | not wired | — | `-Q` | julia-only flag on runner |
 | `-v / --verbose` | off | — | — | — | rust-only |
 

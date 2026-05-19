@@ -154,23 +154,34 @@ CLEARSWI 1.6.1, ROMEO 1.x, MriResearchTools 4.x).
 | romeo | `steps/unwrapped_echo_3.nii` | 6.316 | 0.99991 | 0.50% | ~2π wraps appear at echo 3 |
 | romeo | `unwrapped.nii` | 6.316 | 0.99993 | 0.50% | Carries the echo-3 wraps |
 | romeo | `B0.nii` | 130.6 rad/s | 0.99994 | 0.01% | Linear in wrapped echo 3 |
-| clearswi | `swi.nii` | 1.291 | 0.6338 | 0.12% | Largest divergence — semantic-diff #2 (now resolved on Rust side), #4 (multi-echo combine still local) |
+| romeo | `steps/quality.nii` | 0.580 | 0.6565 | 0.09% | Sub-π. Rust averages directional weights, Julia `voxelquality` uses geometric/product — semantic-diff #6 |
+| clearswi | `steps/phase_mask.nii` | **0** | **1.000000** | **100.00%** | Bit-exact. `robust_mask` port from `qsm_core::utils::robust_mask` agrees with `MriResearchTools.robustmask` on this dataset |
+| clearswi | `steps/mag_combined.nii` | 1.050 | **1.000000** | 0.00% | Identical shape, constant scale offset (SNR weighting differs by a normalising constant) |
+| clearswi | `steps/mag_corrected.nii` | 1.143 | 0.9947 | 0.00% | Propagates from `sensitivity` |
+| clearswi | `steps/sensitivity.nii` | 0.334 | 0.9489 | 0.00% | Algorithmic divergence in the N4-style Gaussian smoothing |
+| clearswi | `steps/phase_unwrapped.nii` | (shape mismatch) | — | — | Rust dumps 4D (per-echo) before combine; Julia CLEARSWI dumps 3D (post-combine). Semantic-diff #4 |
+| clearswi | `swi.nii` | 1.291 | 0.6338 | 0.12% | Largest divergence — semantic-diff #4 (multi-echo combine still local) propagates from above |
 | clearswi | `mip.nii` | 0.809 | 0.6754 | 0.47% | Propagates from `swi` |
 | mcpc3ds | `steps/input_phases.nii` | 1.5e-3 | 0.999999 | 66.78% | Rust rescales in input dtype, Julia in f64 |
 | mcpc3ds | `output.nii` / `steps/corrected.nii` | 6.282 | 0.9912 | 0.42% | ~2π offset on a subset of voxels — same root cause as `romeo phase_corrected` |
 | makehomogeneous | `homogeneous.nii` (3D) | 2.0e-2 | 0.99991 | 4.38% | Small numerical, no 2π issues |
 | makehomogeneous | `steps/bias_field.nii` | 0.334 | 0.99905 | 0.00% | Multiplicative scale offset |
 | romeo_mask | `mask.nii` | 1.0 (binary) | 0.0 | 85.06% | 15% of voxels disagree. Final mask comes from Otsu on the *quality* map, not the magnitude robust_mask — see `cli_parity.md#known-semantic-differences` #6 |
+| romeo_mask | `steps/quality.nii` | 0.556 | — | — | Same semantic-diff #6 as `romeo/quality.nii` |
 
-`MISSING in Julia` step files (`mag_combined`, `mag_corrected`,
-`phase_unwrapped`, `phase_filtered`, `phase_mask`, `qsm`,
-`swi_unscaled`, `sensitivity`, `quality{,_x,_y,_z}`, `phase_offset`)
-are step dumps the Rust binaries emit but the Julia runners do not yet
-write under matching basenames — the Julia packages do emit them when
-`Options.writesteps` is set, but with different names (e.g.
-`combined_mag.nii`, `unwrappedphase.nii`); remapping into the canonical
-basenames is tracked under `next_steps.md` item 5 (Julia-runner flag
-coverage).
+`MISSING in Julia` step files now reduce to:
+- `clearswi/steps/phase_rescaled.nii` — Rust dumps the post-rescale phase
+  explicitly; CLEARSWI.jl doesn't write a directly-comparable step
+  (the rescaled phase is inside `unwrappedphase`).
+- `clearswi/steps/swi_unscaled.nii` — CLEARSWI.jl writes `swiphase` and
+  `swimag` separately rather than the combined SWI before softplus.
+- `mcpc3ds/steps/phase_offset.nii` — `MriResearchTools.mcpc3ds` returns
+  only the corrected phase, not the offset map.
+- `romeo/steps/quality_{x,y,z}.nii` — Julia's `voxelquality` already
+  reduces the three directional weights into a single per-voxel map.
+
+`EXTRA in Julia` step files (CLEARSWI internals without Rust counterparts):
+`filteredphase.nii`, `phase_combined.nii`, `swimag.nii`, `swiphase.nii`.
 
 Three takeaways the next changes should be measured against:
 

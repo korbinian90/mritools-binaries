@@ -55,12 +55,29 @@ function parse_args()
         "--mag-sensitivity-correction"
             help = "Sensitivity correction: on, off"
             default = "on"
+        "--qsm"
+            help = "Use TGV QSM for phase weighting"
+            action = :store_true
+        "--qsm-mask"
+            help = "Mask for QSM (NIfTI file)"
+            default = nothing
         "--writesteps"
             help = "Directory to write canonical intermediate NIfTIs to"
             default = nothing
     end
     return ArgParse.parse_args(s)
 end
+
+# Map CLEARSWI.jl's writesteps file names to the Rust canonical step
+# names so test/compare/run_comparison.sh can diff matching pairs.
+const CLEARSWI_STEP_RENAME = Dict(
+    "combined_mag.nii"               => "mag_combined.nii",
+    "sensitivity_corrected_mag.nii"  => "mag_corrected.nii",
+    "sensitivity.nii"                => "sensitivity.nii",
+    "maskforphase.nii"               => "phase_mask.nii",
+    "unwrappedphase.nii"             => "phase_unwrapped.nii",
+    "combinedphase.nii"              => "phase_combined.nii",
+)
 
 function main()
     args = parse_args()
@@ -122,6 +139,13 @@ function main()
         error("CLEARSWI.jl requires both magnitude and phase inputs")
     end
 
+    # Build the QSM mask if --qsm-mask was supplied.
+    qsm_mask = if args["qsm-mask"] !== nothing
+        Bool.(niread(args["qsm-mask"]).raw .!= 0)
+    else
+        nothing
+    end
+
     data = Data(mag_data, phase_data, mag_nii.header, TEs)
     options = Options(;
         mag_combine = Symbol(args["mag-combine"]),
@@ -130,6 +154,11 @@ function main()
         phase_hp_sigma = args["filter-size"],
         phase_scaling_type = Symbol(args["phase-scaling-type"]),
         phase_scaling_strength = args["phase-scaling-strength"],
+        qsm = args["qsm"],
+        qsm_mask = qsm_mask,
+        # CLEARSWI emits its own intermediates under writesteps; we rename
+        # them below to match the Rust canonical basenames.
+        writesteps = steps_dir,
     )
     swi = calculateSWI(data, options)
 
@@ -139,9 +168,17 @@ function main()
     savenii(swi, output_path; header=mag_nii.header)
     println("  Saved: ", output_path)
 
-    # Canonical intermediate dumps: final SWI and MIP
+    # Canonical intermediate dumps: final SWI and MIP, plus renames of
+    # CLEARSWI.jl's own writesteps output to match the Rust naming.
     if steps_dir !== nothing
         savenii(swi, joinpath(steps_dir, "swi.nii"); header=mag_nii.header)
+        for (julia_name, rust_name) in CLEARSWI_STEP_RENAME
+            src = joinpath(steps_dir, julia_name)
+            dst = joinpath(steps_dir, rust_name)
+            if isfile(src) && src != dst
+                mv(src, dst; force=true)
+            end
+        end
     end
 
     # MIP

@@ -167,6 +167,17 @@ function main()
             savenii(unwrapped, joinpath(steps_dir, "unwrapped_echo_1.nii"); header=phase_nii.header)
             savenii(unwrapped, joinpath(steps_dir, "unwrapped.nii"); header=phase_nii.header)
         end
+
+        # Per-voxel quality map (matches romeo's --write-quality / Rust `quality.nii`).
+        # Built from the same calculateweights call ROMEO uses for unwrapping.
+        if ndims(phase_data) == 4 && size(phase_data, 4) >= 2
+            qkwargs = Dict{Symbol,Any}(:TEs => TEs)
+            if mag_data !== nothing
+                qkwargs[:mag] = mag_data
+            end
+            qmap = voxelquality(phase_data; qkwargs...)
+            savenii(Float64.(qmap), joinpath(steps_dir, "quality.nii"); header=phase_nii.header)
+        end
     end
 
     # B0 computation
