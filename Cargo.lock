@@ -154,7 +154,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "clearswi"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -321,7 +321,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "makehomogeneous"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "mcpc3ds"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "mritools-common"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "qsm-core",
@@ -563,7 +563,7 @@ checksum = "e5864e7ef1a6b7bcf1d6ca3f655e65e724ed3b52546a0d0a663c991522f552ea"
 
 [[package]]
 name = "romeo"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "romeo_mask"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
