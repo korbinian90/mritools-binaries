@@ -4,6 +4,7 @@
 //! romeo, clearswi, mcpc3ds, makehomogeneous and romeo_mask binaries.
 
 pub use qsm_core::nifti_io::{load_nifti, load_nifti_4d, save_nifti, NiftiData};
+pub use qsm_core::utils::robust_mask;
 
 /// Read a NIfTI file from disk and return a [`NiftiData`] struct.
 ///
@@ -516,5 +517,33 @@ mod tests {
         let tes = vec![1.5, 3.0];
         let sel = select_echo_times(&tes, &[0, 5]);
         assert_eq!(sel, vec![1.5]);
+    }
+
+    #[test]
+    fn robust_mask_separates_noise_from_signal() {
+        // 15×15×15 volume with realistic MRI-style bimodal histogram:
+        // an inner 9×9×9 bright block (~24% of voxels, mean ~1.0) on a low
+        // noise floor (~0.05). MriResearchTools robustmask's quantile rule
+        // expects q80 to land inside the bright body — needs >20% bright.
+        let nx = 15;
+        let ny = 15;
+        let nz = 15;
+        let n = nx * ny * nz;
+        let mut mag = vec![0.05_f64; n];
+        for k in 3..12 {
+            for j in 3..12 {
+                for i in 3..12 {
+                    mag[i + j * nx + k * nx * ny] = 1.0;
+                }
+            }
+        }
+        let mask = robust_mask(&mag, nx, ny, nz);
+        // Centre voxel must be in-mask; corner voxel must be out.
+        assert_eq!(
+            mask[7 + 7 * nx + 7 * nx * ny],
+            1,
+            "centre should be in-mask"
+        );
+        assert_eq!(mask[0], 0, "corner should be out-of-mask");
     }
 }

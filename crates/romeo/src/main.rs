@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d,
+    robust_mask, save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d,
     write_nifti_from_4d, NiftiData4D,
 };
 use qsm_core::region_grow::grow_region_unwrap;
@@ -242,7 +242,9 @@ fn main() -> Result<()> {
     // Build mask
     let mask = build_mask(
         mag_4d.as_ref().map(|m| m.volumes[0].as_slice()),
-        n_voxels,
+        nx,
+        ny,
+        nz,
         &cli.mask,
     );
 
@@ -799,7 +801,14 @@ fn rescale_phase(phase: &mut [f64]) {
 }
 
 /// Build a binary mask from the mask argument.
-fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec<u8> {
+fn build_mask(
+    mag: Option<&[f64]>,
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    mask_args: &[String],
+) -> Vec<u8> {
+    let n_voxels = nx * ny * nz;
     let mask_type = mask_args
         .first()
         .map(|s| s.as_str())
@@ -808,7 +817,7 @@ fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec
         "nomask" => vec![1u8; n_voxels],
         "robustmask" => {
             if let Some(mag) = mag {
-                robust_mask(mag)
+                robust_mask(mag, nx, ny, nz)
             } else {
                 vec![1u8; n_voxels]
             }
@@ -826,18 +835,6 @@ fn build_mask(mag: Option<&[f64]>, n_voxels: usize, mask_args: &[String]) -> Vec
             }
         }
     }
-}
-
-/// Build a robust magnitude-based binary mask (Otsu threshold).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Find the seed voxel (highest total weight).

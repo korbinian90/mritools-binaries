@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
     fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    save_settings, select_echo_times, select_volumes, write_nifti,
+    robust_mask, save_settings, select_echo_times, select_volumes, write_nifti,
 };
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
 use qsm_core::utils::otsu_threshold;
@@ -190,7 +190,7 @@ fn main() -> Result<()> {
 
     // Build a simple mask (all ones, or magnitude-based)
     let initial_mask = if !mag_data.is_empty() {
-        robust_mask(&mag_data)
+        robust_mask(&mag_data, nx, ny, nz)
     } else {
         vec![1u8; n_voxels]
     };
@@ -386,18 +386,6 @@ fn rescale_phase(phase: &mut [f64]) {
     for v in phase.iter_mut() {
         *v = (*v - min) / (max - min) * 2.0 * pi - pi;
     }
-}
-
-/// Build a robust magnitude-based binary mask (threshold at 10% of max).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Compute a per-voxel quality map from the edge weights.

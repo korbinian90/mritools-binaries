@@ -38,7 +38,7 @@ driving `ROMEO.unwrap` / `MriResearchTools.romeo`.
 | # | Step | Julia source | qsm-core function | Rust site | Local? |
 |---|---|---|---|---|---|
 | 1 | Phase rescale to [-π, π] | `MriResearchTools/src/utility.jl` (`rescale`) | — | `romeo/main.rs:717-728` (`rescale_phase`) | yes (trivial) |
-| 2 | Mask build (`robustmask`/`nomask`/`qualitymask`/FILE) | `MriResearchTools/src/mask.jl` (`robustmask`) | — | `romeo/main.rs:730-758` (`build_mask`) → `robust_mask` 760-770 | yes (10 %-of-max, see semantic-diff in `cli_parity.md`) |
+| 2 | Mask build (`robustmask`/`nomask`/`qualitymask`/FILE) | `MriResearchTools/src/mask.jl` (`robustmask`) | `qsm_core::utils::robust_mask` (quantile rule + morphology) | `romeo/main.rs` `build_mask` → `mritools_common::robust_mask` | no |
 | 3 | MCPC-3D-S phase offset correction | `MriResearchTools/src/mcpc3ds.jl` (`mcpc3ds`) | `qsm_core::utils::mcpc3ds_single_coil`, `mcpc3ds_b0_pipeline` | `romeo/main.rs:~260-330` | no |
 | 4 | Bipolar correction (if requested) | `MriResearchTools/src/mcpc3ds.jl` eddy-current section | — | delegates to step 3 with `bipolar=true` arg; local fallback in `mcpc3ds/main.rs:273-315` (see mcpc3ds below) | yes |
 | 5 | ROMEO weight calculation | `ROMEO.jl/src/weights.jl` (`calculateweights`) | `qsm_core::unwrap::romeo::calculate_weights_romeo`, `calculate_weights_romeo_configurable` | `romeo/main.rs:622-691` (`calculate_weights_with_config`) | no |
@@ -61,7 +61,7 @@ driving `CLEARSWI.calculateSWI`.
 | 1 | Magnitude combination (`SNR`/`sum-of-squares`/`average`) | `CLEARSWI.jl/src/magnitude.jl` (`combine_magnitude`) | — | `clearswi/main.rs:656-737` (`combine_magnitude`) | yes |
 | 2 | Sensitivity estimation (N4-style Gaussian smoothing) | `MriResearchTools.jl/src/smoothing.jl` (`getsensitivity`) | `qsm_core::utils::get_sensitivity` | `clearswi/main.rs:~180-245` | no |
 | 3 | Bias correction via sensitivity | `CLEARSWI.jl/src/magnitude.jl` (inline) | — | `clearswi/main.rs:~245-280` | yes (one divide) |
-| 4 | Mask (`robustmask`) | `MriResearchTools.jl/src/mask.jl` | — | `clearswi/main.rs:789-799` (`robust_mask`) | yes (semantic-diff) |
+| 4 | Mask (`robustmask`) | `MriResearchTools.jl/src/mask.jl` | `qsm_core::utils::robust_mask` | `clearswi/main.rs` → `mritools_common::robust_mask` | no |
 | 5 | Phase rescale | `CLEARSWI.jl/src/phase.jl` | — | `clearswi/main.rs:776-787` (`rescale_phase`) | yes (trivial) |
 | 6 | Phase unwrapping — Laplacian 3-D | `CLEARSWI.jl/src/unwrapping.jl` (`laplacian_unwrap`) | `qsm_core::unwrap::laplacian::laplacian_unwrap` | `clearswi/main.rs:376-418`, 524-535 | no |
 | 6b | Phase unwrapping — ROMEO | `ROMEO.jl/src/unwrapping.jl` | `qsm_core::unwrap::romeo::calculate_weights_romeo` + `qsm_core::region_grow::grow_region_unwrap` | `clearswi/main.rs:524` → `unwrap_romeo` 739-767 | no |
@@ -81,7 +81,7 @@ driving `MriResearchTools.mcpc3ds`.
 | # | Step | Julia source | qsm-core function | Rust site | Local? |
 |---|---|---|---|---|---|
 | 1 | Phase rescale | `MriResearchTools.jl/src/utility.jl` | — | `mcpc3ds/main.rs:318-329` (`rescale_phase`) | yes (trivial) |
-| 2 | Mask build | `MriResearchTools.jl/src/mask.jl` | — | `mcpc3ds/main.rs:331-341` (`robust_mask`) | yes (semantic-diff) |
+| 2 | Mask build | `MriResearchTools.jl/src/mask.jl` | `qsm_core::utils::robust_mask` | `mcpc3ds/main.rs` → `mritools_common::robust_mask` | no |
 | 3 | MCPC-3D-S single-coil | `MriResearchTools.jl/src/mcpc3ds.jl` (`mcpc3ds`) | `qsm_core::utils::mcpc3ds_single_coil` | `mcpc3ds/main.rs:205-210` | no |
 | 4 | Bipolar eddy-current correction | `MriResearchTools.jl/src/mcpc3ds.jl` (bipolar branch) | — | `mcpc3ds/main.rs:273-315` (`bipolar_correction`) | **yes — local algorithm** |
 | 5 | NIfTI write-out (+ `--write-phase-offsets`, `--writesteps`) | `NIfTI.jl` | `qsm_core::nifti_io` | `mcpc3ds/main.rs:~245-265` | no |
@@ -109,7 +109,7 @@ Rust binary: `crates/romeo_mask/src/main.rs` · Julia CLI:
 | # | Step | Julia source | qsm-core function | Rust site | Local? |
 |---|---|---|---|---|---|
 | 1 | Phase rescale | `MriResearchTools.jl/src/utility.jl` | — | `romeo_mask/main.rs:347-358` (`rescale_phase`) | yes (trivial) |
-| 2 | Initial mask (`robustmask`) | `MriResearchTools.jl/src/mask.jl` | `qsm_core::utils::otsu_threshold` (optional) | `romeo_mask/main.rs:360-370` (`robust_mask`) | yes (semantic-diff — 10 % threshold, Julia uses Otsu) |
+| 2 | Initial mask (`robustmask`) | `MriResearchTools.jl/src/mask.jl` | `qsm_core::utils::robust_mask` | `romeo_mask/main.rs` → `mritools_common::robust_mask` | no |
 | 3 | ROMEO weight calculation | `ROMEO.jl/src/weights.jl` | `qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable}` | `romeo_mask/main.rs:292-344` | no |
 | 4 | Quality-map flattening | `ROMEO.jl/src/utility.jl` | — | `romeo_mask/main.rs:372-392` (`compute_quality_map`) | **yes — local algorithm** |
 | 5 | Threshold + write mask | `MriResearchTools.jl/src/mask.jl` (`qualitymask`) | — | `romeo_mask/main.rs:~225-260` | yes |
@@ -159,7 +159,7 @@ CLEARSWI 1.6.1, ROMEO 1.x, MriResearchTools 4.x).
 | mcpc3ds | `output.nii` / `steps/corrected.nii` | 6.282 | 0.9912 | 0.42% | ~2π offset on a subset of voxels |
 | makehomogeneous | `homogeneous.nii` (3D) | 2.0e-2 | 0.99991 | 4.38% | Small numerical, no 2π issues |
 | makehomogeneous | `steps/bias_field.nii` | 0.334 | 0.99905 | 0.00% | Multiplicative scale offset |
-| romeo_mask | `mask.nii` | 1.0 (binary) | 0.0 | 85.06% | 15% of voxels disagree (Otsu vs 10%-of-max — see `cli_parity.md#known-semantic-differences` #1) |
+| romeo_mask | `mask.nii` | 1.0 (binary) | 0.0 | 85.06% | 15% of voxels disagree. Final mask comes from Otsu on the *quality* map, not the magnitude robust_mask — see `cli_parity.md#known-semantic-differences` #1. |
 
 `MISSING in Julia` step files (`mag_combined`, `mag_corrected`,
 `phase_unwrapped`, `phase_filtered`, `phase_mask`, `qsm`,
@@ -180,9 +180,25 @@ Three takeaways the next changes should be measured against:
    wrap-divergence next_steps.md item 4 calls out. echo_1 already has
    a 0.18-rad bias, so the first divergence is not the TE-ratio
    templating but something earlier in the per-echo unwrap path.
-3. **`mask.nii` correlation 0.0 with 85% binary agreement** is the
-   Otsu-vs-10%-of-max semantic-diff. The Otsu port (next_steps.md
-   item 2a) should push agreement materially above 85%.
+3. **`mask.nii` correlation 0.0 with 85% binary agreement** — this is
+   the romeo_mask *final* binary mask, derived from Otsu on the
+   per-voxel quality map. The 15% disagreement is unrelated to the
+   magnitude robust_mask path (which is now an exact port of the
+   Julia algorithm, see semantic-diff #1 resolved). The remaining
+   disagreement most likely lives in how the quality map is
+   computed (Rust averages the three directional weights;
+   ROMEO.jl uses a product combination) — see
+   `cli_parity.md#known-semantic-differences` #6.
+
+### Sensitivity of this dataset to the mask port
+
+The synthetic `test/data/small` magnitude has min=0.13, max=0.69 with
+no zero-signal background. Both the old 10%-of-max rule and the new
+quantile rule produce an all-ones mask on it; the baseline numbers in
+the table above did **not** change between the two implementations.
+Real (clinical) data has a noise corner that the quantile rule
+exploits — see `crates/common/src/lib.rs` test
+`robust_mask_separates_noise_from_signal` for a minimal reproducer.
 
 ---
 

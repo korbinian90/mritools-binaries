@@ -165,12 +165,21 @@ These behaviours are identical on both Rust and Julia *runners* today,
 but diverge from the Julia packages they wrap. Document-only — not
 fixed in this pass.
 
-1. **Robust mask (all phase/magnitude-based masks)** — Rust binaries
-   build a mask by thresholding at 10% of the max magnitude
-   (`clearswi/main.rs:779-788`, `mcpc3ds/main.rs:331-340`,
-   `romeo_mask/main.rs:360-369`). The Julia `robustmask` from
-   `MriResearchTools` uses an Otsu-like statistic. Outputs will differ
-   on real data and tolerance should reflect this.
+1. ~~**Robust mask (all phase/magnitude-based masks)**~~ — **resolved.**
+   The four call sites in `clearswi`, `mcpc3ds`, `romeo` and `romeo_mask`
+   now go through `mritools_common::robust_mask` (re-export of
+   `qsm_core::utils::robust_mask`), which is a port of
+   `MriResearchTools.robustmask`: quantile-based threshold
+   (`high_intensity = mean(w[q80..q99])`, `noise = mean(w[w<=q15])` with
+   a `q05` fallback, `threshold = max(5*noise, high_intensity/5)`) plus
+   morphological cleanup (gaussian smooth-and-threshold at 0.4, fill
+   holes, second smooth-and-threshold at 0.6). Note: despite the name
+   in `next_steps.md`, the Julia function is **not** Otsu — it's a
+   hand-tuned quantile rule with explicit MRI-specific assumptions
+   (one corner is noise-only). Otsu is still used for the
+   quality-map-based threshold in `romeo_mask` (`romeo_mask/main.rs:233`)
+   via `qsm_core::utils::otsu_threshold` — that's a different and
+   correct application.
 2. **TGV-QSM parameters hard-coded** — CLEARSWI Rust uses
    `iterations=800`, `erosions=0`, `b0_dir=(0,0,1)`, default α₀/α₁
    (`clearswi/main.rs:429-462`). Julia CLEARSWI exposes these on its

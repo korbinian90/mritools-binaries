@@ -50,12 +50,20 @@ The baseline lives under
 
 These are documented in `docs/cli_parity.md#known-semantic-differences`:
 
-a) **`robust_mask` Otsu port.** Three sites currently use a fixed
-   10%-of-max threshold (`clearswi/main.rs:779-788`,
-   `mcpc3ds/main.rs:331-340`, `romeo_mask/main.rs:360-369`). Julia's
-   `MriResearchTools.robustmask` uses Otsu on the magnitude histogram.
-   Port it once into `mritools_common::mask::otsu_threshold` and call from
-   all three sites. Expect a measurable jump in parity on masked outputs.
+a) ~~**`robust_mask` Otsu port.**~~ — **done**, with a correction:
+   the Julia `MriResearchTools.robustmask` is **not** Otsu, it's a
+   quantile rule (`high_intensity = mean(w[q80..q99])`, `noise =
+   mean(w[w<=q15])` with a `q05` fallback,
+   `threshold = max(5*noise, high_intensity/5)`) plus morphological
+   cleanup (smooth-and-threshold at 0.4, hole-fill,
+   second smooth-and-threshold at 0.6). All four call sites
+   (`clearswi`, `mcpc3ds`, `romeo`, `romeo_mask`) now route through
+   `mritools_common::robust_mask` (re-export of
+   `qsm_core::utils::robust_mask`, which is already a port of the
+   Julia algorithm). The synthetic `test/data/small` dataset has no
+   noise corner so both algorithms produce the same all-ones mask
+   on it — see baseline section in `docs/algorithm_provenance.md`.
+   The win shows up on clinical data with a real background.
 
 b) **TGV-QSM hyperparameters.** `crates/clearswi/src/main.rs:429-462`
    hard-codes `iter=800`, `b0_dir=(0,0,1)`. Expose `--tgv-iterations`,

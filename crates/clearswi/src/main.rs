@@ -11,8 +11,9 @@ mod algorithms;
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, save_settings,
-    select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData, NiftiData4D,
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, robust_mask,
+    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData,
+    NiftiData4D,
 };
 use qsm_core::inversion::tgv::{tgv_qsm, TgvParams};
 use qsm_core::region_grow::grow_region_unwrap;
@@ -187,7 +188,7 @@ fn main() -> Result<()> {
     let mag_combined: Vec<f64> = combine_magnitude(&mag_4d, &cli.mag_combine, &echo_times);
 
     // Build mask from combined magnitude
-    let mask = robust_mask(&mag_combined);
+    let mask = robust_mask(&mag_combined, nx, ny, nz);
 
     // Apply magnitude sensitivity correction
     let mut sensitivity_map: Option<Vec<f64>> = None;
@@ -812,18 +813,6 @@ fn rescale_phase(phase: &mut [f64]) {
     for v in phase.iter_mut() {
         *v = (*v - min) / (max - min) * 2.0 * pi - pi;
     }
-}
-
-/// Build a robust magnitude-based binary mask (threshold at 10% of max).
-fn robust_mask(mag: &[f64]) -> Vec<u8> {
-    let max = mag.iter().cloned().fold(0.0_f64, f64::max);
-    if max < 1e-10 {
-        return vec![1u8; mag.len()];
-    }
-    let threshold = 0.1 * max;
-    mag.iter()
-        .map(|&v| if v >= threshold { 1u8 } else { 0u8 })
-        .collect()
 }
 
 /// Parse filter size from CLI arguments. Default: [4.0, 4.0, 0.0].
