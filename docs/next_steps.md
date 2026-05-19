@@ -161,12 +161,29 @@ What is **not** worth wiring:
 - `romeo/steps/quality_{x,y,z}.nii` — `voxelquality` already
   reduces the three directional weights into a single map.
 
-### 6. Larger test data
+### 6. Larger test data — scaffold done, dataset selection open
 
-`test/data/small/` is 51×51×41×3 float32. Add an opt-in fixture for clinical
-sizes (e.g. 256³×5) under `test/data/extra/`, gated behind
-`make download-extra` or a `--data-dir` override. Don't commit the bytes —
-fetch from a stable URL (OSF, Zenodo) with a checksum.
+`test/data/extra/` now contains a fetch scaffold:
+- `fetch.sh` reads a TSV manifest of `(path, url, sha256)` tuples,
+  downloads each entry (curl or wget), and verifies the sha256.
+  Re-runs skip files whose checksum already matches; mismatches delete
+  the file and exit non-zero.
+- `.gitignore` excludes `*.nii` and `*.nii.gz` so the bytes are never
+  committed.
+- `README.md` documents how to author a manifest, how to drive the
+  harness against the fetched data (`run_comparison.sh --data-dir
+  test/data/extra ...`), and what dataset properties actually expose
+  the documented divergences (noise corner, ≥3 echoes, realistic
+  dynamic range).
+
+What's still open: choosing the dataset itself. The fetch script is
+intentionally URL-agnostic because the right choice depends on the
+licence the project wants to accept and on the host's long-term
+availability. Likely candidates: a multi-echo GRE from BIDS Open
+Datasets (ds003523, ds002785, ds001785) or one of the QSM Reconstruction
+Challenge fixtures on Zenodo. Once one is picked, add a default
+`manifest.tsv` and the harness can be exercised against it both
+locally and (optionally) on the CI matrix.
 
 ## Out of scope for now
 
