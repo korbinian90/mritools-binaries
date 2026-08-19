@@ -42,6 +42,10 @@ COPY --from=builder \
     /build/target/release/romeo_mask \
     /usr/local/bin/
 
+# MIT requires the upstream copyright notices to accompany binary distributions;
+# NOTICE.md also carries the MCPC-3D-S/ASPIRE patent notice.
+COPY LICENSE NOTICE.md /usr/share/doc/mritools-binaries/
+
 WORKDIR /data
 
 LABEL org.opencontainers.image.title="mritools-binaries" \

@@ -7,18 +7,43 @@
 Lightweight Rust CLI binaries for MRI processing — Rust ports of the Julia tools
 from [korbinian90/CompileMRI.jl](https://github.com/korbinian90/CompileMRI.jl) (v4.7.1).
 
-The binaries aim to closely follow the Julia CLI interfaces so they can be used as
-drop-in replacements in most existing pipelines, but there may still be minor differences.
+The binaries follow the Julia CLI interfaces closely at the **flag** level, so most
+existing command lines run unchanged.
+
+> ### ⚠ Not yet numerically equivalent to the Julia tools
+>
+> **Do not treat these as drop-in replacements for the Julia binaries.** The
+> cross-language comparison harness (`test/compare/`) measures the current
+> agreement with the Julia reference, and for some tools it is far from 1:1 - the
+> CLEAR-SWI output in particular is a visibly different image, not a rounding
+> difference. Results are not interchangeable with the Julia tools, and should not
+> be mixed within one study or compared against Julia-produced results.
+>
+> The numbers below are the measured baseline on the small test dataset. See
+> [`docs/algorithm_provenance.md`](docs/algorithm_provenance.md#baseline-small-dataset)
+> for how they were obtained and
+> [`docs/next_steps.md`](docs/next_steps.md) for what is being done about them.
 
 ## Binaries
 
-| Binary | Description | Status |
-|---|---|---|
-| `romeo` | ROMEO phase unwrapping | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
-| `clearswi` | CLEAR-SWI susceptibility weighted imaging | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
-| `mcpc3ds` | MCPC-3D-S multi-channel phase combination | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
-| `makehomogeneous` | Homogeneity correction for high-field MRI | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
-| `romeo_mask` | ROMEO quality-based brain masking | ✅ Implemented via [QSM.rs](https://github.com/astewartau/QSM.rs) |
+Status columns: **CLI** is flag coverage, **Parity** is measured numerical agreement
+with the Julia reference on the small test dataset.
+
+| Binary | Description | CLI | Parity vs Julia |
+|---|---|---|---|
+| `romeo` | ROMEO phase unwrapping | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ r ≈ 0.9999 on unwrapped/B0, but with ~2π wrap divergence and a 0.18 rad first-echo bias |
+| `clearswi` | CLEAR-SWI susceptibility weighted imaging | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ❌ **r ≈ 0.63** on the SWI output - largest divergence, do not use for analysis |
+| `mcpc3ds` | MCPC-3D-S multi-channel phase combination | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ r ≈ 0.991, with 2π offsets on a subset of voxels |
+| `makehomogeneous` | Homogeneity correction for high-field MRI | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ✅ r ≈ 0.99991, sub-2% max difference |
+| `romeo_mask` | ROMEO quality-based brain masking | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ 85% binary agreement |
+
+Several flags are additionally parsed but ignored (`accepted-no-op`) or behave
+differently (`semantic-diff`); every one of them is listed in
+[`docs/cli_parity.md`](docs/cli_parity.md).
+
+The parity harness runs in CI on every push, but is **not currently a merge gate** -
+today's baseline has documented divergences, so it reports rather than blocks. Its
+job is to catch regressions until absolute parity is closed.
 
 ## Installation
 
@@ -136,3 +161,13 @@ LICENSE                  # MIT
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+This is a derivative of MIT-licensed Julia packages and depends on
+[QSM.rs](https://github.com/astewartau/QSM.rs) for most of its algorithms; the
+required upstream attributions are in [NOTICE.md](NOTICE.md), which must ship
+with the binaries.
+
+Note that MCPC-3D-S / ASPIRE (`mcpc3ds`, and `romeo`'s phase-offset correction)
+is **patent-encumbered** ([US10605885B2](https://patents.google.com/patent/US10605885B2/en)):
+free for scientific use, but commercial use requires a licence, and the method
+may not be used for diagnosis in humans. See [NOTICE.md](NOTICE.md).
