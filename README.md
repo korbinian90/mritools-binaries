@@ -19,10 +19,11 @@ existing command lines run unchanged.
 > difference. Results are not interchangeable with the Julia tools, and should not
 > be mixed within one study or compared against Julia-produced results.
 >
-> The numbers below are the measured baseline on the small test dataset. See
+> The numbers below were measured by running the harness, not copied from a
+> previous report. See
 > [`docs/algorithm_provenance.md`](docs/algorithm_provenance.md#baseline-small-dataset)
-> for how they were obtained and
-> [`docs/next_steps.md`](docs/next_steps.md) for what is being done about them.
+> for the per-step mapping and [`docs/next_steps.md`](docs/next_steps.md) for
+> what is being done about them.
 
 ## Binaries
 
@@ -31,11 +32,27 @@ with the Julia reference on the small test dataset.
 
 | Binary | Description | CLI | Parity vs Julia |
 |---|---|---|---|
-| `romeo` | ROMEO phase unwrapping | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ r ≈ 0.9999 on unwrapped/B0, but with ~2π wrap divergence and a 0.18 rad first-echo bias |
-| `clearswi` | CLEAR-SWI susceptibility weighted imaging | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ❌ **r ≈ 0.63** on the SWI output - largest divergence, do not use for analysis |
-| `mcpc3ds` | MCPC-3D-S multi-channel phase combination | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ r ≈ 0.991, with 2π offsets on a subset of voxels |
-| `makehomogeneous` | Homogeneity correction for high-field MRI | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ✅ r ≈ 0.99991, sub-2% max difference |
-| `romeo_mask` | ROMEO quality-based brain masking | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ 85% binary agreement |
+| `romeo` | ROMEO phase unwrapping | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ unwrapped r = 0.99997, B0 r = 0.99994, but max abs diff 6.31 rad ≈ 2π - whole-wrap divergence, not rounding |
+| `clearswi` | CLEAR-SWI susceptibility weighted imaging | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ❌ **swi r = 0.634**, mip r = 0.675 - largest divergence, do not use for analysis |
+| `mcpc3ds` | MCPC-3D-S multi-channel phase combination | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ r = 0.991 |
+| `makehomogeneous` | Homogeneity correction for high-field MRI | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ✅ r = 0.9999, bias field r = 0.9991 |
+| `romeo_mask` | ROMEO quality-based brain masking | ✅ via [QSM.rs](https://github.com/astewartau/QSM.rs) | ⚠ 85.06% binary agreement |
+
+Measured with `test/compare/run_comparison.sh --tolerance 1e-4` on
+`test/data/small` with echo times `1 2 3`, against Julia 1.11.5 and the current
+`ROMEO.jl` / `CLEARSWI.jl` / `MriResearchTools.jl`. Reproduce with that command.
+
+Two intermediates point at where the divergence starts, and are more useful than
+the end-product numbers when working on this:
+
+- **The ROMEO quality map is the weakest link.** `romeo`'s `quality.nii`
+  correlates 0.656 and `romeo_mask`'s 0.708. Since the mask is a threshold on
+  that map, the 85% mask agreement is a symptom rather than an independent
+  problem, and fixing the quality-map combination should move both.
+- **CLEAR-SWI's magnitude path is close, so the phase path is the suspect.**
+  `mag_combined` r = 1.000, `mag_corrected` r = 0.995, `sensitivity` r = 0.949 -
+  yet `swi` lands at 0.634. `phase_unwrapped` could not even be compared
+  (shape mismatch between the two `steps/` dumps).
 
 Several flags are additionally parsed but ignored (`accepted-no-op`) or behave
 differently (`semantic-diff`); every one of them is listed in
