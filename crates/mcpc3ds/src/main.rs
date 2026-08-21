@@ -10,8 +10,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_times, read_nifti_4d, robust_mask, save_settings,
-    write_nifti_4d, write_nifti_from_4d,
+    fix_ge_phase_slices, parse_echo_times,
+    provenance::{Method, Provenance},
+    read_nifti_4d, robust_mask, write_nifti_4d, write_nifti_from_4d,
 };
 use qsm_core::utils::mcpc3ds_single_coil;
 
@@ -102,7 +103,26 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    save_settings(output_dir, "mcpc3ds", &args)?;
+    {
+        // MCPC-3D-S is the method this tool exists to run, so it is always cited,
+        // together with its patent notice.
+        let mut prov = Provenance::new("mcpc3ds", &args)
+            .setting("output", &cli.output)
+            .setting("echo_times", cli.echo_times.join(" "))
+            .setting("smoothing_sigma", cli.smoothing_sigma.join(" "))
+            .setting("bipolar", cli.bipolar)
+            .setting("no_phase_rescale", cli.no_phase_rescale)
+            .setting("fix_ge_phase", cli.fix_ge_phase)
+            .used(Method::Aspire)
+            .optional(Method::Romeo);
+        if let Some(p) = cli.phase.as_deref() {
+            prov = prov.setting("phase", p).input("phase", p);
+        }
+        if let Some(m) = cli.magnitude.as_deref() {
+            prov = prov.setting("magnitude", m).input("magnitude", m);
+        }
+        prov.write(output_dir)?;
+    }
 
     // Setup writesteps directory if requested
     if let Some(ref dir) = cli.writesteps {

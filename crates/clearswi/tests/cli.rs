@@ -512,7 +512,8 @@ fn clearswi_missing_magnitude_fails() {
 
 // ===== Settings file content =====
 
-/// Verify the settings file contains the correct command-line arguments.
+/// Verify the provenance record: the command that ran, the resolved settings,
+/// and citations covering the methods used and nothing else.
 #[test]
 fn clearswi_settings_file_content() {
     let tmpdir = tempfile::tempdir().unwrap();
@@ -535,8 +536,8 @@ fn clearswi_settings_file_content() {
     assert!(settings_path.exists());
     let content = std::fs::read_to_string(&settings_path).unwrap();
     assert!(
-        content.contains("Arguments:"),
-        "settings file should contain 'Arguments:'"
+        content.contains("# command:"),
+        "settings file should record the command line"
     );
     assert!(
         content.contains("-p"),
@@ -545,6 +546,39 @@ fn clearswi_settings_file_content() {
     assert!(
         content.contains("-m"),
         "settings file should contain the magnitude flag"
+    );
+    // Resolved settings, not just the raw arguments.
+    assert!(
+        content.contains("unwrapping_algorithm:"),
+        "settings file should record resolved settings"
+    );
+    // A record from the port must say it is the port.
+    assert!(
+        content.contains("not yet numerically equivalent"),
+        "settings file should flag that this is the Rust port"
+    );
+
+    let citations_path = tmpdir.path().join("citations_clearswi.txt");
+    assert!(citations_path.exists(), "a citations file must be written");
+    let citations = std::fs::read_to_string(&citations_path).unwrap();
+    assert!(
+        citations.contains("CLEAR-SWI"),
+        "citations should cover the method that ran"
+    );
+    // Default unwrapping is laplacian, so ROMEO did not run here.
+    assert!(
+        !citations.contains("Rapid Opensource Minimum Spanning"),
+        "citations must not list a method that did not run"
+    );
+    // No QSM was requested, so nothing about the dipole inversion.
+    assert!(
+        !citations.contains("Langkammer"),
+        "citations must not list TGV when --qsm was not given"
+    );
+    // MCPC-3D-S did not run, so its patent notice must be absent.
+    assert!(
+        !citations.contains("US10605885B2"),
+        "patent notice must only appear when the patented method ran"
     );
 }
 

@@ -312,7 +312,18 @@ fn makehomogeneous_settings_file_content() {
     let settings_path = tmpdir.path().join("settings_makehomogeneous.txt");
     assert!(settings_path.exists());
     let content = std::fs::read_to_string(&settings_path).unwrap();
-    assert!(content.contains("Arguments:"));
+    assert!(content.contains("# command:"));
+    // The methods that ran must be cited alongside the settings.
+    let citations = std::fs::read_to_string(
+        std::path::Path::new(&settings_path)
+            .parent()
+            .unwrap()
+            .join("citations_makehomogeneous.txt"),
+    )
+    .expect("citations file");
+    assert!(citations.contains("A Simple Homogeneity Correction"));
+    assert!(!citations.contains("US10605885B2"));
+
     assert!(content.contains("-m"));
     assert!(content.contains("-s"));
     assert!(content.contains("3"));
