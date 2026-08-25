@@ -3,6 +3,9 @@
 //! Provides NIfTI I/O helpers and other common functions shared across the
 //! romeo, clearswi, mcpc3ds, makehomogeneous and romeo_mask binaries.
 
+pub mod provenance;
+pub use provenance::{Method, Provenance};
+
 pub use qsm_core::nifti_io::{load_nifti, load_nifti_4d, save_nifti, NiftiData};
 pub use qsm_core::utils::robust_mask;
 
@@ -391,15 +394,6 @@ pub fn select_echo_times(echo_times: &[f64], indices: &[usize]) -> Vec<f64> {
         .filter(|&&i| i < echo_times.len())
         .map(|&i| echo_times[i])
         .collect()
-}
-
-/// Save a human-readable settings file to `<dir>/settings_<tool>.txt`.
-pub fn save_settings(dir: &str, tool: &str, args: &[String]) -> anyhow::Result<()> {
-    let path = std::path::Path::new(dir).join(format!("settings_{}.txt", tool));
-    let content = format!("Arguments: {}\n", args.join(" "));
-    std::fs::write(&path, content)
-        .map_err(|e| anyhow::anyhow!("Cannot write settings file '{}': {}", path.display(), e))?;
-    Ok(())
 }
 
 #[cfg(test)]

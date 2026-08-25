@@ -10,8 +10,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    robust_mask, save_settings, select_echo_times, select_volumes, write_nifti,
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times,
+    provenance::{Method, Provenance},
+    read_nifti, read_nifti_4d, robust_mask, select_echo_times, select_volumes, write_nifti,
 };
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
 use qsm_core::utils::otsu_threshold;
@@ -118,7 +119,26 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    save_settings(output_dir, "romeo_mask", &args)?;
+    {
+        // The mask is a threshold on the ROMEO voxel quality map.
+        let mut prov = Provenance::new("romeo_mask", &args)
+            .setting("output", &cli.output)
+            .setting("factor", cli.factor)
+            .setting("echo_times", cli.echo_times.join(" "))
+            .setting("weights", &cli.weights)
+            .setting("no_phase_rescale", cli.no_phase_rescale)
+            .setting("fix_ge_phase", cli.fix_ge_phase)
+            .used(Method::Romeo)
+            .optional(Method::PhaseBasedMasking)
+            .optional(Method::QsmxT);
+        if let Some(p) = cli.phase.as_deref() {
+            prov = prov.setting("phase", p).input("phase", p);
+        }
+        if let Some(m) = cli.magnitude.as_deref() {
+            prov = prov.setting("magnitude", m).input("magnitude", m);
+        }
+        prov.write(output_dir)?;
+    }
 
     // Parse echo times
     let mut echo_times =

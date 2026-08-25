@@ -12,9 +12,10 @@ mod algorithms;
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti, read_nifti_4d,
-    robust_mask, save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_4d,
-    write_nifti_from_4d, NiftiData4D,
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times,
+    provenance::{Method, Provenance},
+    read_nifti, read_nifti_4d, robust_mask, select_echo_times, select_volumes, write_nifti,
+    write_nifti_4d, write_nifti_from_4d, NiftiData4D,
 };
 use qsm_core::region_grow::grow_region_unwrap;
 use qsm_core::unwrap::romeo::{calculate_weights_romeo, calculate_weights_romeo_configurable};
@@ -277,7 +278,37 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    save_settings(output_dir, "romeo", &args)?;
+    {
+        // MCPC-3D-S runs when phase-offset correction is on, which -B also
+        // switches on for multi-echo input. Cite it only then.
+        let poc = cli.phase_offset_correction.as_deref().unwrap_or("off");
+        let used_mcpc3ds = poc != "off" && echo_times.len() > 1;
+        let mut prov = Provenance::new("romeo", &args)
+            .setting("phase", &cli.phase)
+            .setting("magnitude", cli.magnitude.as_deref().unwrap_or("none"))
+            .setting("output", &cli.output)
+            .setting("echo_times", format!("{:?}", echo_times))
+            .setting("weights", &cli.weights)
+            .setting("mask", cli.mask.join(" "))
+            .setting("phase_offset_correction", poc)
+            .setting("individual_unwrapping", cli.individual_unwrapping)
+            .setting("template", cli.template)
+            .setting("no_phase_rescale", cli.no_phase_rescale)
+            .input("phase", &cli.phase)
+            .used(Method::Romeo)
+            .optional(Method::PhaseBasedMasking)
+            .optional(Method::QsmxT);
+        if let Some(m) = cli.magnitude.as_deref() {
+            prov = prov.input("magnitude", m);
+        }
+        if used_mcpc3ds {
+            prov = prov.used(Method::Aspire);
+        }
+        if cli.weights == "bestpath" {
+            prov = prov.used(Method::Bestpath);
+        }
+        prov.write(output_dir)?;
+    }
 
     // Prepare writesteps directory if requested
     let steps_dir = cli.writesteps.as_deref();

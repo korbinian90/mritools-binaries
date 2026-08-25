@@ -109,7 +109,13 @@ jobs:
           BIN_DIR="target/${{ matrix.target }}/release"
           ARCHIVE="mritools-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
           BINARIES="romeo clearswi mcpc3ds makehomogeneous romeo_mask"
-          tar -czf "$ARCHIVE" -C "$BIN_DIR" $BINARIES
+          # LICENSE and NOTICE.md must travel with the binaries: MIT requires the
+          # upstream copyright notices in binary distributions, and NOTICE.md also
+          # carries the MCPC-3D-S/ASPIRE patent notice.
+          STAGE="$(mktemp -d)"
+          cp $(printf "$BIN_DIR/%s " $BINARIES) "$STAGE/"
+          cp LICENSE NOTICE.md "$STAGE/"
+          tar -czf "$ARCHIVE" -C "$STAGE" $BINARIES LICENSE NOTICE.md
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Create release archive (Windows)
@@ -119,7 +125,10 @@ jobs:
           $BIN_DIR = "target/${{ matrix.target }}/release"
           $ARCHIVE = "mritools-${{ github.ref_name }}-${{ matrix.target }}.zip"
           $binaries = @("romeo.exe","clearswi.exe","mcpc3ds.exe","makehomogeneous.exe","romeo_mask.exe")
-          $paths = $binaries | ForEach-Object { Join-Path $BIN_DIR $_ }
+          # LICENSE and NOTICE.md must travel with the binaries: MIT requires the
+          # upstream copyright notices in binary distributions, and NOTICE.md also
+          # carries the MCPC-3D-S/ASPIRE patent notice.
+          $paths = @($binaries | ForEach-Object { Join-Path $BIN_DIR $_ }) + @("LICENSE","NOTICE.md")
           Compress-Archive -Path $paths -DestinationPath $ARCHIVE
           echo "ARCHIVE=$ARCHIVE" | Out-File -Append -FilePath $env:GITHUB_ENV
 

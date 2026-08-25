@@ -5,7 +5,7 @@ on this branch):
 - Workspace builds, **121 tests pass**, clippy + fmt clean, CI green on all 3 OSes.
 - All 5 binaries dump canonical intermediates to `<out>/steps/`.
 - Julia runners under `test/compare/julia/` all execute end-to-end against the
-  pinned package versions (CLEARSWI 1.6.1, ROMEO 1.x, MriResearchTools 4.x);
+  pinned package versions (CLEARSWI 1.6.1, ROMEO 1.x, MriResearchTools 3.x);
   on Julia 1.12.6 the Manifest's `1.10.11` resolve warning is harmless for this
   set of APIs.
 - `docs/cli_parity.md` and `docs/algorithm_provenance.md` are the reference for

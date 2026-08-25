@@ -389,7 +389,8 @@ fn mcpc3ds_settings_file_content() {
     let settings_path = tmpdir.path().join("settings_mcpc3ds.txt");
     assert!(settings_path.exists());
     let content = std::fs::read_to_string(&settings_path).unwrap();
-    assert!(content.contains("Arguments:"));
+    assert!(content.contains("# command:"));
+
     assert!(content.contains("-p"));
     assert!(content.contains("-m"));
 }
@@ -529,4 +530,39 @@ fn mcpc3ds_4d_combined() {
     assert!(tmpdir.path().join("output.nii").exists());
     assert!(tmpdir.path().join("output_phase_offset.nii").exists());
     assert!(steps_dir.exists());
+}
+
+/// mcpc3ds always runs the patented method, so its record must carry the notice.
+/// This is the file someone reads before publishing or before shipping a product,
+/// which is why the notice belongs here rather than only in the repository docs.
+#[test]
+fn record_carries_citation_and_patent_notice() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    // -o is a filename prefix here, so the record lands in its parent directory.
+    let out = tmpdir.path().join("combined");
+    let status = mcpc3ds_bin()
+        .args([
+            "-p",
+            &phase_file(),
+            "-m",
+            &mag_file(),
+            "-t",
+            "1:3",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to execute mcpc3ds");
+    assert!(status.success());
+
+    let settings =
+        std::fs::read_to_string(tmpdir.path().join("settings_mcpc3ds.txt")).expect("settings");
+    assert!(settings.contains("# command:"));
+    assert!(settings.contains("echo_times:"));
+
+    let citations =
+        std::fs::read_to_string(tmpdir.path().join("citations_mcpc3ds.txt")).expect("citations");
+    assert!(citations.contains("Computationally Efficient Combination"));
+    assert!(citations.contains("US10605885B2"));
+    assert!(citations.contains("may not be used for diagnosis in humans"));
 }

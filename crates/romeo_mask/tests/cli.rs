@@ -611,7 +611,10 @@ fn romeo_mask_settings_file_content() {
     let settings_path = tmpdir.path().join("settings_romeo_mask.txt");
     assert!(settings_path.exists());
     let content = std::fs::read_to_string(&settings_path).unwrap();
-    assert!(content.contains("Arguments:"));
+    assert!(content.contains("# command:"));
+    // romeo_mask thresholds the ROMEO quality map; MCPC-3D-S does not run.
+    assert!(content.contains("weights:"));
+
     assert!(content.contains("-p"));
     assert!(content.contains("-t"));
 }

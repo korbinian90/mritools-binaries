@@ -11,9 +11,10 @@ mod algorithms;
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    fix_ge_phase_slices, parse_echo_selection, parse_echo_times, read_nifti_4d, robust_mask,
-    save_settings, select_echo_times, select_volumes, write_nifti, write_nifti_from_4d, NiftiData,
-    NiftiData4D,
+    fix_ge_phase_slices, parse_echo_selection, parse_echo_times,
+    provenance::{Method, Provenance},
+    read_nifti_4d, robust_mask, select_echo_times, select_volumes, write_nifti,
+    write_nifti_from_4d, NiftiData, NiftiData4D,
 };
 use qsm_core::inversion::tgv::{tgv_qsm, TgvParams};
 use qsm_core::region_grow::grow_region_unwrap;
@@ -193,7 +194,46 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    save_settings(output_dir, "clearswi", &args)?;
+    {
+        let mut prov = Provenance::new("clearswi", &args)
+            .setting("output", &cli.output)
+            .setting("echo_times", cli.echo_times.join(" "))
+            .setting("mag_combine", cli.mag_combine.join(" "))
+            .setting(
+                "mag_sensitivity_correction",
+                &cli.mag_sensitivity_correction,
+            )
+            .setting("mag_softplus_scaling", &cli.mag_softplus_scaling)
+            .setting("unwrapping_algorithm", &cli.unwrapping_algorithm)
+            .setting("filter_size", cli.filter_size.join(" "))
+            .setting("phase_scaling_type", &cli.phase_scaling_type)
+            .setting("mip_slices", &cli.mip_slices)
+            .setting("qsm", cli.qsm)
+            .used(Method::ClearSwi);
+        if let Some(m) = cli.magnitude.as_deref() {
+            prov = prov.setting("magnitude", m).input("magnitude", m);
+        }
+        if let Some(p) = cli.phase.as_deref() {
+            prov = prov.setting("phase", p).input("phase", p);
+        }
+        if cli.mag_sensitivity_correction == "on" {
+            prov = prov.used(Method::Homogeneity);
+        }
+        if cli.unwrapping_algorithm == "romeo" {
+            prov = prov.used(Method::Romeo);
+        } else if cli.unwrapping_algorithm.contains("laplacian") {
+            prov = prov.used(Method::Laplacian);
+        }
+        // --qsm runs the TGV inversion here. With --qsm-input the user supplies a
+        // finished map, so nothing is cited for it on our side.
+        if cli.qsm && cli.qsm_input.is_none() {
+            prov = prov
+                .used(Method::Tgv)
+                .used(Method::TgvOriginal)
+                .used(Method::Romeo);
+        }
+        prov.write(output_dir)?;
+    }
 
     // Parse echo times
     let mut echo_times =

@@ -9,7 +9,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use mritools_common::{
-    read_nifti, read_nifti_4d, save_settings, write_nifti, write_nifti_4d, write_nifti_from_4d,
+    provenance::{Method, Provenance},
+    read_nifti, read_nifti_4d, write_nifti, write_nifti_4d, write_nifti_from_4d,
 };
 
 /// Homogeneity correction for high-field MRI.
@@ -87,7 +88,16 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot create output directory '{}'", output_dir))?;
 
     let args: Vec<String> = std::env::args().collect();
-    save_settings(output_dir, "makehomogeneous", &args)?;
+    {
+        let mut prov = Provenance::new("makehomogeneous", &args)
+            .setting("output", &cli.output)
+            .used(Method::Homogeneity)
+            .used(Method::ClearSwi);
+        if let Some(m) = cli.magnitude.as_deref() {
+            prov = prov.setting("magnitude", m).input("magnitude", m);
+        }
+        prov.write(output_dir)?;
+    }
 
     // Load magnitude image as 4D to detect multi-echo
     let mag_4d = read_nifti_4d(magnitude)
