@@ -23,6 +23,7 @@ use qsm_core::utils::mcpc3ds_single_coil;
 #[command(
     name = "mcpc3ds",
     about = "MCPC-3D-S multi-channel phase combination",
+    after_help = "Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.",
     version
 )]
 struct Cli {

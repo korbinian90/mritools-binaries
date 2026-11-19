@@ -46,10 +46,12 @@ The tag push triggers `.github/workflows/release.yml`, which:
 ## After the release runs
 
 `softprops/action-gh-release@v2` creates the release with an empty
-body. Add release notes via:
+body. Add release notes, starting with the research use only notice, via:
 
 ```bash
 gh release edit v0.3.0 --notes-file - <<'EOF'
+**Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.**
+
 - Notable change 1
 - Notable change 2
 EOF

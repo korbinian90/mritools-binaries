@@ -21,6 +21,7 @@ use mritools_common::{
 #[command(
     name = "makehomogeneous",
     about = "Homogeneity correction for high-field MRI magnitude images",
+    after_help = "Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.",
     version
 )]
 struct Cli {

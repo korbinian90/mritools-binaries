@@ -24,6 +24,7 @@ use qsm_core::utils::otsu_threshold;
 #[command(
     name = "romeo_mask",
     about = "ROMEO quality-based brain masking",
+    after_help = "Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.",
     version
 )]
 struct Cli {
