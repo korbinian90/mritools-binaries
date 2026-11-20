@@ -30,6 +30,7 @@ use qsm_core::utils::get_sensitivity;
 #[command(
     name = "clearswi",
     about = "CLEAR-SWI susceptibility weighted imaging",
+    after_help = "Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.",
     version
 )]
 struct Cli {

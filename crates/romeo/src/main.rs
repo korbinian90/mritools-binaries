@@ -28,6 +28,7 @@ use qsm_core::utils::{mcpc3ds_b0_pipeline, mcpc3ds_single_coil, B0WeightType};
 #[command(
     name = "romeo",
     about = "ROMEO phase unwrapping",
+    after_help = "Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.",
     long_about = None,
     version,
 )]

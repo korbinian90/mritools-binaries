@@ -1,5 +1,7 @@
 # mritools-binaries
 
+> **Research use only. Not a medical device. Not intended for diagnosis, treatment or clinical decisions.**
+
 (Warning: fully vibe-coded CLI support using [QSM.rs](https://github.com/astewartau/QSM.rs) with the [CompileMRI.jl](https://github.com/korbinian90/CompileMRI.jl) CLI API)
 
 [![CI](https://github.com/korbinian90/mritools-binaries/actions/workflows/ci.yml/badge.svg)](https://github.com/korbinian90/mritools-binaries/actions/workflows/ci.yml)
